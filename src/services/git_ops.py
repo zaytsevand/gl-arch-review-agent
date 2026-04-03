@@ -103,10 +103,31 @@ class GitOps:
         )
         return sha_result.stdout.strip()
 
-    def push(self, repo_dir: Path, branch: str = "main") -> None:
-        subprocess.run(
-            ["git", "push", "origin", branch],
-            cwd=repo_dir,
-            check=True,
-            capture_output=True,
-        )
+    def push(self, repo_dir: Path, branch: str = "main", max_retries: int = 3) -> None:
+        for attempt in range(1, max_retries + 1):
+            result = subprocess.run(
+                ["git", "push", "origin", branch],
+                cwd=repo_dir,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                return
+
+            if attempt < max_retries and (
+                "rejected" in result.stderr or "fetch first" in result.stderr
+            ):
+                subprocess.run(
+                    ["git", "pull", "--rebase", "origin", branch],
+                    cwd=repo_dir,
+                    check=True,
+                    capture_output=True,
+                )
+                continue
+
+            raise subprocess.CalledProcessError(
+                result.returncode,
+                result.args,
+                output=result.stdout,
+                stderr=result.stderr,
+            )

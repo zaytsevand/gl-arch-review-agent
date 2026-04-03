@@ -89,3 +89,62 @@ adr-agent review-group unlimit-test-agent \
 ```
 
 Expected output: ~4 ADL entries, 2-3 ADR files, MR comments on significant MRs.
+
+## CI/CD Integration
+
+### Quick Start (3 lines)
+
+Add to your service repo's `.gitlab-ci.yml`:
+
+```yaml
+include:
+  - project: 'your-group/adr-review-agent'
+    file: 'ci/adr-agent.gitlab-ci.yml'
+```
+
+Then set these CI/CD variables in **Settings > CI/CD > Variables**:
+
+| Variable | Required | Type | Description |
+|----------|----------|------|-------------|
+| `ADR_AGENT_GITLAB_TOKEN` | Yes | Masked, protected | GitLab PAT with `api` scope |
+| `ADR_AGENT_ANTHROPIC_KEY` | Yes | Masked, protected | Anthropic API key |
+| `ADR_AGENT_ARCH_REPO` | Yes | String | Path to architecture-decisions repo |
+| `ADR_AGENT_MODEL` | No | String | LLM model (default: `claude-sonnet-4-6`) |
+| `ADR_AGENT_DRY_RUN` | No | `true`/`false` | Analyze without committing (default: `false`) |
+| `ADR_AGENT_TARGET_BRANCHES` | No | String | Comma-separated target branches (default: all) |
+| `ADR_AGENT_AUTO_BASELINE` | No | `true`/`false` | Auto-generate baseline if missing (default: `true`) |
+| `ADR_AGENT_STRICT` | No | `true`/`false` | Block MR merge on failure (default: `false`) |
+| `ADR_AGENT_VERBOSE` | No | `true`/`false` | Print classification reasoning (default: `false`) |
+
+### Group-Level Setup
+
+To apply the agent to **all repos in a GitLab group**:
+
+1. Go to your group's **Settings > CI/CD > General pipelines**
+2. Add the CI include in the group's CI/CD configuration:
+   ```yaml
+   include:
+     - project: 'your-group/adr-review-agent'
+       file: 'ci/adr-agent.gitlab-ci.yml'
+   ```
+3. Set the required CI/CD variables at the **group level** (Settings > CI/CD > Variables)
+4. All repos in the group will now run the agent on every MR
+
+Repo-level variable overrides take precedence over group-level settings.
+
+### Behavior
+
+- **Advisory by default**: Agent stage uses `allow_failure: true` — it won't block MRs
+- **Strict mode**: Set `ADR_AGENT_STRICT=true` to make the agent stage blocking
+- **MR-only**: Agent only runs on merge request pipelines, not branch pushes or tags
+- **Concurrent safe**: If two agent runs conflict on the architecture-decisions repo, the agent retries with rebase (up to 3 attempts)
+
+### Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| `Missing required CI/CD variables` | Set `ADR_AGENT_GITLAB_TOKEN`, `ADR_AGENT_ANTHROPIC_KEY`, `ADR_AGENT_ARCH_REPO` in CI/CD settings |
+| Agent doesn't run on my MR | Check `ADR_AGENT_TARGET_BRANCHES` — if set, your target branch must match |
+| Agent runs but doesn't commit | Check if `ADR_AGENT_DRY_RUN` is set to `true` |
+| Pipeline times out | Increase `ADR_AGENT_TIMEOUT` (default: 600 seconds) |
+| Push conflict on architecture-decisions repo | Agent retries 3 times automatically. If it still fails, re-run the pipeline. |

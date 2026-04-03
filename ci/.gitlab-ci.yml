@@ -1,0 +1,46 @@
+# =============================================================================
+# ADR Review Agent — Container Image Build Pipeline
+# =============================================================================
+#
+# Builds and publishes the agent container image to GitLab Container Registry.
+# Triggered on:
+#   - Tag pushes (tagged with the version, e.g., v0.1.0)
+#   - Merges to main (tagged as 'latest')
+# =============================================================================
+
+stages:
+  - build
+
+variables:
+  DOCKER_TLS_CERTDIR: "/certs"
+
+build-image:
+  stage: build
+  image: docker:24-cli
+  services:
+    - docker:24-dind
+
+  rules:
+    # Build on version tags
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/'
+      variables:
+        IMAGE_TAG: "$CI_COMMIT_TAG"
+    # Build on merges to main
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      variables:
+        IMAGE_TAG: "latest"
+
+  before_script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+
+  script:
+    - echo "Building image ${CI_REGISTRY_IMAGE}:${IMAGE_TAG}"
+    - docker build -t "${CI_REGISTRY_IMAGE}:${IMAGE_TAG}" -f ci/Dockerfile .
+    - docker push "${CI_REGISTRY_IMAGE}:${IMAGE_TAG}"
+    # Also tag version releases as 'latest'
+    - |
+      if [ "$IMAGE_TAG" != "latest" ]; then
+        docker tag "${CI_REGISTRY_IMAGE}:${IMAGE_TAG}" "${CI_REGISTRY_IMAGE}:latest"
+        docker push "${CI_REGISTRY_IMAGE}:latest"
+      fi
+    - echo "Image published: ${CI_REGISTRY_IMAGE}:${IMAGE_TAG}"
