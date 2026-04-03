@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field
 
@@ -75,7 +75,7 @@ class FlaggedUnknown(BaseModel):
 
 
 class BaselineDocument(BaseModel):
-    generated_at: datetime = Field(default_factory=datetime.utcnow)
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     repos_scanned: list[str] = Field(default_factory=list)
     branches_scanned: list[str] = Field(default_factory=list)
     services: list[ServiceInventoryEntry] = Field(default_factory=list)

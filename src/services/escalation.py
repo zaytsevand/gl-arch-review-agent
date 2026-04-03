@@ -21,8 +21,13 @@ ESCALATION_CRITERIA = {
 def compute_pattern_hash(review: MultiAgentReview) -> str:
     if not review.perspectives:
         return ""
-    first = review.perspectives[0].classification
-    key = f"{first.change_type}:{':'.join(sorted(first.relevant_files))}"
+    # Use all perspectives' change types and files for a robust hash
+    parts: list[str] = []
+    for p in review.perspectives:
+        cls = p.classification
+        files_key = ":".join(sorted(cls.relevant_files))
+        parts.append(f"{p.perspective}={cls.change_type}:{files_key}")
+    key = "|".join(sorted(parts))
     return hashlib.sha256(key.encode()).hexdigest()[:16]
 
 

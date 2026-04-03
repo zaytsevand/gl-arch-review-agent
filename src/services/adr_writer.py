@@ -6,7 +6,7 @@ from pathlib import Path
 
 import anthropic
 from jinja2 import Environment, FileSystemLoader
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from src.models.classification import MultiAgentReview
 from src.models.output import ADRDocument, Alternative
@@ -48,7 +48,11 @@ def _slugify(title: str) -> str:
     return slug[:60]
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(min=1, max=10),
+    retry=retry_if_exception_type((anthropic.APITimeoutError, anthropic.RateLimitError, anthropic.InternalServerError)),
+)
 async def generate_adr_content(
     review: MultiAgentReview,
     mr_title: str,

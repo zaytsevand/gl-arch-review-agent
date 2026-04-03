@@ -12,6 +12,18 @@ MANDATORY_SECTIONS = [
     "Communication Patterns",
 ]
 
+# File patterns that indicate infrastructure changes
+INFRA_FILE_PATTERNS = [
+    re.compile(r"Dockerfile", re.IGNORECASE),
+    re.compile(r"docker-compose", re.IGNORECASE),
+    re.compile(r"\.gitlab-ci\.yml$"),
+    re.compile(r"k8s/"),
+    re.compile(r"kubernetes/"),
+    re.compile(r"helm/"),
+    re.compile(r"terraform/"),
+    re.compile(r"\.tf$"),
+]
+
 
 def check_baseline_exists(arch_repo_dir: Path) -> str:
     baseline_path = arch_repo_dir / BASELINE_FILENAME
@@ -63,6 +75,11 @@ def check_staleness(
     for mr_state in state.analyzed_mrs.values():
         if mr_state.significance == "high":
             high_count += 1
+
+        # Check if any analyzed MR involved infrastructure changes
+        if mr_state.change_type:
+            if mr_state.change_type in ("infrastructure", "config_change"):
+                infra_change = True
 
     if high_count >= high_significance_threshold:
         return True

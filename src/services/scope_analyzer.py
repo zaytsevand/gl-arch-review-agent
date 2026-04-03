@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
+
+import gitlab.exceptions
 
 from src.models.classification import BlameEntry, ChangeScope, RelatedMR, TicketRef
 from src.models.gitlab_types import MRAnalysisInput
 from src.services.git_ops import GitOps
 from src.services.gitlab_client import GitLabClient
 
-TICKET_PATTERN = re.compile(r"[A-Z]{2,10}-\d+")
+logger = logging.getLogger(__name__)
+
+TICKET_PATTERN = re.compile(r"(?<![A-Za-z/])([A-Z]{2,10}-\d+)")
 
 
 def extract_ticket_refs(mr: MRAnalysisInput) -> list[TicketRef]:
@@ -81,7 +86,8 @@ def find_related_mrs(
                             )
                         )
                         break
-        except Exception:
+        except gitlab.exceptions.GitlabError as exc:
+            logger.debug("Skipping project %s: %s", proj_path, exc)
             continue
 
     return related

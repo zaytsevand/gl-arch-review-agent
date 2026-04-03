@@ -1,5 +1,5 @@
 # Stage 1: Build — install adr-agent with all dependencies
-FROM python:3.11-slim AS builder
+FROM python:3.11.12-slim AS builder
 
 WORKDIR /build
 COPY pyproject.toml .
@@ -8,7 +8,7 @@ COPY src/ src/
 RUN pip install --no-cache-dir --prefix=/install .
 
 # Stage 2: Runtime — slim image with only the installed package
-FROM python:3.11-slim
+FROM python:3.11.12-slim
 
 COPY --from=builder /install /usr/local
 

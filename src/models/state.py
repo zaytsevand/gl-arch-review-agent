@@ -13,6 +13,7 @@ class MRState(BaseModel):
     discussion_count: int = 0
     pipeline_status: str = ""
     significance: str = ""
+    change_type: str = ""
     adl_entry_number: int | None = None
     adr_file: str | None = None
 

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import sys
 from pathlib import Path
 
+import anthropic
 import click
+import gitlab.exceptions
 
 from src.models.classification import Significance
 from src.services.adl_writer import read_ci_config, write_adl
@@ -21,6 +24,8 @@ from src.services.baseline_detector import check_baseline_exists, check_stalenes
 from src.services.baseline_writer import archive_baseline, write_baseline
 from src.services.codebase_scanner import scan_repos
 
+logger = logging.getLogger(__name__)
+
 
 @click.group()
 @click.option("--gitlab-url", envvar="GITLAB_URL", default="https://gitlab.com")
@@ -30,8 +35,9 @@ from src.services.codebase_scanner import scan_repos
 @click.option("--model", default="claude-sonnet-4-6", help="LLM model for analysis")
 @click.option("--dry-run", is_flag=True, help="Analyze without committing or commenting")
 @click.option("--verbose", is_flag=True, help="Show classification reasoning")
+@click.option("--pipeline-timeout", type=int, default=300, help="Pipeline check timeout in seconds")
 @click.pass_context
-def cli(ctx, gitlab_url, gitlab_token, anthropic_key, arch_repo, model, dry_run, verbose):
+def cli(ctx, gitlab_url, gitlab_token, anthropic_key, arch_repo, model, dry_run, verbose, pipeline_timeout):
     ctx.ensure_object(dict)
     ctx.obj["gitlab_url"] = gitlab_url
     ctx.obj["gitlab_token"] = gitlab_token
@@ -40,6 +46,7 @@ def cli(ctx, gitlab_url, gitlab_token, anthropic_key, arch_repo, model, dry_run,
     ctx.obj["model"] = model
     ctx.obj["dry_run"] = dry_run
     ctx.obj["verbose"] = verbose
+    ctx.obj["pipeline_timeout"] = pipeline_timeout
 
 
 async def process_single_mr(
@@ -195,7 +202,7 @@ def review_mr(ctx, mr_ref):
             f"docs: analyze {project_path}!{mr_iid}",
         )
         git_ops.push(arch_repo_dir)
-        check_pipeline(gitlab_client, obj["arch_repo"])
+        check_pipeline(gitlab_client, obj["arch_repo"], timeout_seconds=obj["pipeline_timeout"])
 
 
 @cli.command("review-repo")
@@ -225,7 +232,7 @@ def review_repo(ctx, repo_path, mr_state):
                     state_manager, arch_repo_dir, group_path,
                 )
             )
-        except Exception as e:
+        except (anthropic.APIError, gitlab.exceptions.GitlabError, OSError) as e:
             click.echo(click.style(f"  FAILED: {mr.project_path}!{mr.mr_iid} — {e}", fg="red"))
             continue
 
@@ -237,10 +244,7 @@ def review_repo(ctx, repo_path, mr_state):
             files_to_commit.append("adr/")
         git_ops.stage_and_commit(arch_repo_dir, files_to_commit, f"docs: analyze MRs from {repo_path}")
         git_ops.push(arch_repo_dir)
-        check_pipeline(gitlab_client, obj["arch_repo"])
-
-
-@cli.command("review-group")
+        check_pipeline(gitlab_client, obj["arch_repo"], timeout_seconds=obj["pipeline_timeout"])
 @click.argument("group_path")
 @click.option("--state", "mr_state", default="all", type=click.Choice(["opened", "merged", "all"]))
 @click.pass_context
@@ -278,7 +282,7 @@ def review_group(ctx, group_path, mr_state):
                     )
                 )
                 processed += 1
-            except Exception as e:
+            except (anthropic.APIError, gitlab.exceptions.GitlabError, OSError) as e:
                 click.echo(click.style(f"\n  FAILED: {mr.project_path}!{mr.mr_iid} — {e}", fg="red"))
                 failed += 1
                 continue
@@ -302,7 +306,7 @@ def review_group(ctx, group_path, mr_state):
             files_to_commit.append("ARCHITECTURE_BASELINE.md")
         git_ops.stage_and_commit(arch_repo_dir, files_to_commit, f"docs: analyze MRs from group {group_path}")
         git_ops.push(arch_repo_dir)
-        check_pipeline(gitlab_client, obj["arch_repo"])
+        check_pipeline(gitlab_client, obj["arch_repo"], timeout_seconds=obj["pipeline_timeout"])
 
 
 async def ensure_baseline(
@@ -327,8 +331,8 @@ async def ensure_baseline(
     await write_baseline(
         baseline, arch_repo_dir, obj["anthropic_key"], state_manager.state, obj["model"]
     )
-    from datetime import datetime
-    state_manager.state.baseline_generated_at = datetime.utcnow()
+    from datetime import datetime, timezone
+    state_manager.state.baseline_generated_at = datetime.now(timezone.utc)
     state_manager.state.baseline_version += 1
     state_manager.state.baseline_repos_scanned = repo_paths
     click.echo(click.style("  Baseline generated successfully", fg="green"))
@@ -358,8 +362,8 @@ def snapshot(ctx, repo_paths):
         )
     )
 
-    from datetime import datetime
-    state_manager.state.baseline_generated_at = datetime.utcnow()
+    from datetime import datetime, timezone
+    state_manager.state.baseline_generated_at = datetime.now(timezone.utc)
     state_manager.state.baseline_version += 1
     state_manager.state.baseline_repos_scanned = repo_list
     state_manager.save()
@@ -379,7 +383,7 @@ def snapshot(ctx, repo_paths):
             arch_repo_dir, files, "docs: generate architecture baseline"
         )
         git_ops.push(arch_repo_dir)
-        check_pipeline(gitlab_client, obj["arch_repo"])
+        check_pipeline(gitlab_client, obj["arch_repo"], timeout_seconds=obj["pipeline_timeout"])
 
     click.echo(click.style("Baseline snapshot complete", fg="green"))
 

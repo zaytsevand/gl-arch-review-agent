@@ -66,51 +66,37 @@ adr-review:
   timeout: ${ADR_AGENT_TIMEOUT} seconds
 
   before_script:
-    # Validate required variables
-    - |
-      MISSING=""
-      if [ -z "$ADR_AGENT_GITLAB_TOKEN" ]; then MISSING="$MISSING\n  - ADR_AGENT_GITLAB_TOKEN (GitLab PAT with api scope)"; fi
-      if [ -z "$ADR_AGENT_ANTHROPIC_KEY" ]; then MISSING="$MISSING\n  - ADR_AGENT_ANTHROPIC_KEY (Anthropic API key)"; fi
-      if [ -z "$ADR_AGENT_ARCH_REPO" ]; then MISSING="$MISSING\n  - ADR_AGENT_ARCH_REPO (path to architecture-decisions repo)"; fi
-      if [ -n "$MISSING" ]; then
-        echo "ERROR: Missing required CI/CD variables:"
-        echo -e "$MISSING"
-        echo ""
-        echo "Set these in your project or group CI/CD settings:"
-        echo "  Settings → CI/CD → Variables"
-        echo ""
-        echo "See the ADR Review Agent documentation for setup instructions."
-        exit 1
-      fi
+    # Validate required variables using the shared validation script
+    - sh ci/validate-vars.sh
 
   script:
     - |
-      # Build the command
-      CMD="adr-agent review-mr '${CI_PROJECT_PATH}!${CI_MERGE_REQUEST_IID}'"
-      CMD="$CMD --gitlab-url '$CI_SERVER_URL'"
-      CMD="$CMD --gitlab-token '$ADR_AGENT_GITLAB_TOKEN'"
-      CMD="$CMD --anthropic-key '$ADR_AGENT_ANTHROPIC_KEY'"
-      CMD="$CMD --arch-repo '$ADR_AGENT_ARCH_REPO'"
+      # Build the command as an array to avoid shell injection via eval
+      set -- adr-agent review-mr "${CI_PROJECT_PATH}!${CI_MERGE_REQUEST_IID}" \
+        --gitlab-url "$CI_SERVER_URL" \
+        --gitlab-token "$ADR_AGENT_GITLAB_TOKEN" \
+        --anthropic-key "$ADR_AGENT_ANTHROPIC_KEY" \
+        --arch-repo "$ADR_AGENT_ARCH_REPO"
 
       # Optional: model selection
       if [ -n "$ADR_AGENT_MODEL" ] && [ "$ADR_AGENT_MODEL" != "claude-sonnet-4-6" ]; then
-        CMD="$CMD --model '$ADR_AGENT_MODEL'"
+        set -- "$@" --model "$ADR_AGENT_MODEL"
       fi
 
       # Optional: dry-run mode
       if [ "$ADR_AGENT_DRY_RUN" = "true" ]; then
-        CMD="$CMD --dry-run"
+        set -- "$@" --dry-run
         echo "Running in DRY-RUN mode — no commits or comments will be posted."
       fi
 
       # Optional: verbose mode
       if [ "$ADR_AGENT_VERBOSE" = "true" ]; then
-        CMD="$CMD --verbose"
+        set -- "$@" --verbose
       fi
 
       echo "Analyzing MR: ${CI_PROJECT_PATH}!${CI_MERGE_REQUEST_IID}"
       echo "Architecture repo: ${ADR_AGENT_ARCH_REPO}"
       echo ""
 
-      # Execute
-      eval $CMD
+      # Execute directly — no eval
+      "$@"

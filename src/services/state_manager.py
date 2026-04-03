@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime
+import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 from src.models.gitlab_types import MRAnalysisInput
@@ -21,10 +22,19 @@ class StateManager:
         return ProcessingState()
 
     def save(self) -> None:
-        self.state.last_run = datetime.utcnow()
-        self.state_path.write_text(
-            self.state.model_dump_json(indent=2, exclude_none=True)
+        self.state.last_run = datetime.now(timezone.utc)
+        content = self.state.model_dump_json(indent=2, exclude_none=True)
+        # Atomic write: write to temp file then rename to avoid partial writes
+        fd, tmp_path = tempfile.mkstemp(
+            dir=self.state_path.parent, suffix=".tmp"
         )
+        try:
+            with open(fd, "w") as f:
+                f.write(content)
+            Path(tmp_path).replace(self.state_path)
+        except BaseException:
+            Path(tmp_path).unlink(missing_ok=True)
+            raise
 
     def mr_key(self, project_path: str, mr_iid: int) -> str:
         return f"{project_path}!{mr_iid}"

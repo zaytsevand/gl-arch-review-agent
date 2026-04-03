@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import gitlab
 
 from src.models.gitlab_types import (
@@ -9,6 +11,8 @@ from src.models.gitlab_types import (
     MRAnalysisInput,
     Note,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class GitLabClient:
@@ -34,16 +38,22 @@ class GitLabClient:
 
         discussions = []
         for disc in mr.discussions.list(get_all=True):
-            notes = [
-                Note(
-                    author=n["author"]["username"],
-                    body=n["body"],
-                    created_at=n["created_at"],
-                    system=n.get("system", False),
-                )
-                for n in disc.attributes.get("notes", [])
-            ]
-            first_note = disc.attributes.get("notes", [{}])[0]
+            raw_notes = disc.attributes.get("notes", [])
+            notes = []
+            for n in raw_notes:
+                try:
+                    notes.append(
+                        Note(
+                            author=n.get("author", {}).get("username", "unknown"),
+                            body=n.get("body", ""),
+                            created_at=n.get("created_at", "1970-01-01T00:00:00Z"),
+                            system=n.get("system", False),
+                        )
+                    )
+                except (KeyError, TypeError) as exc:
+                    logger.debug("Skipping malformed note in discussion %s: %s", disc.id, exc)
+                    continue
+            first_note = raw_notes[0] if raw_notes else {}
             position = first_note.get("position") or {}
             discussions.append(
                 Discussion(
@@ -79,7 +89,7 @@ class GitLabClient:
             author=mr.author["username"],
             diffs=diffs,
             discussions=discussions,
-            pipeline_status=pipeline.get("status", ""),
+            pipeline_status=pipeline.get("status", "unknown"),
             commits=commits,
             web_url=mr.web_url,
         )
@@ -100,7 +110,8 @@ class GitLabClient:
         for proj in projects:
             try:
                 all_mrs.extend(self.list_mrs(proj.path_with_namespace, state))
-            except gitlab.exceptions.GitlabError:
+            except gitlab.exceptions.GitlabError as exc:
+                logger.debug("Skipping project %s: %s", proj.path_with_namespace, exc)
                 continue
         return all_mrs
 

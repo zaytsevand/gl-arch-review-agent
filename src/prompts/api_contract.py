@@ -1,3 +1,5 @@
+PROMPT_VERSION = "1.0"
+
 SYSTEM_PROMPT = """You are an API contract and interface analyst for a microservices platform.
 Your job is to classify whether a code diff represents an architecturally significant change
 from the perspective of API contracts, endpoints, and inter-service interfaces.

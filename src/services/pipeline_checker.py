@@ -11,9 +11,11 @@ def check_pipeline(
     gitlab_client: GitLabClient,
     project_path: str,
     ref: str = "main",
-    timeout_seconds: int = 300,
+    timeout_seconds: int | None = None,
     poll_interval: int = 10,
 ) -> str:
+    if timeout_seconds is None:
+        timeout_seconds = 300
     elapsed = 0
     while elapsed < timeout_seconds:
         status = gitlab_client.get_pipeline_status(project_path, ref)

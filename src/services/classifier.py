@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from collections import Counter
 
@@ -15,6 +16,10 @@ from src.models.classification import (
 )
 from src.models.gitlab_types import FileDiff, MRAnalysisInput
 from src.prompts import api_contract, dependency_coupling, risk_security
+
+logger = logging.getLogger(__name__)
+
+MAX_DIFF_CHARS = 2000
 
 CLASSIFICATION_TOOL = {
     "name": "classify_architectural_significance",
@@ -70,27 +75,27 @@ CLASSIFICATION_TOOL = {
 }
 
 ARCH_RELEVANT_PATTERNS = [
-    r".*Controller.*\.java$",
-    r".*Resource.*\.java$",
-    r".*Client.*\.java$",
-    r".*Feign.*\.java$",
-    r".*Listener.*\.java$",
-    r".*Publisher.*\.java$",
-    r".*Consumer.*\.java$",
-    r".*Producer.*\.java$",
-    r".*Entity.*\.java$",
-    r".*Model.*\.java$",
-    r".*/model/.*\.java$",
-    r".*/dto/.*\.java$",
-    r".*/config/.*\.java$",
-    r".*/handler/.*\.java$",
-    r".*migration.*",
-    r".*application.*\.(yml|yaml|properties)$",
-    r".*build\.gradle.*$",
-    r".*pom\.xml$",
-    r".*\.gitlab-ci\.yml$",
-    r".*Dockerfile.*$",
-    r".*docker-compose.*$",
+    re.compile(r".*Controller.*\.java$"),
+    re.compile(r".*Resource.*\.java$"),
+    re.compile(r".*Client.*\.java$"),
+    re.compile(r".*Feign.*\.java$"),
+    re.compile(r".*Listener.*\.java$"),
+    re.compile(r".*Publisher.*\.java$"),
+    re.compile(r".*Consumer.*\.java$"),
+    re.compile(r".*Producer.*\.java$"),
+    re.compile(r".*Entity.*\.java$"),
+    re.compile(r".*Model.*\.java$"),
+    re.compile(r".*/model/.*\.java$"),
+    re.compile(r".*/dto/.*\.java$"),
+    re.compile(r".*/config/.*\.java$"),
+    re.compile(r".*/handler/.*\.java$"),
+    re.compile(r".*migration.*"),
+    re.compile(r".*application.*\.(yml|yaml|properties)$"),
+    re.compile(r".*build\.gradle.*$"),
+    re.compile(r".*pom\.xml$"),
+    re.compile(r".*\.gitlab-ci\.yml$"),
+    re.compile(r".*Dockerfile.*$"),
+    re.compile(r".*docker-compose.*$"),
 ]
 
 
@@ -98,7 +103,7 @@ def filter_relevant_diffs(diffs: list[FileDiff]) -> list[FileDiff]:
     relevant = []
     for d in diffs:
         path = d.new_path or d.old_path
-        if any(re.match(pattern, path) for pattern in ARCH_RELEVANT_PATTERNS):
+        if any(pattern.match(path) for pattern in ARCH_RELEVANT_PATTERNS):
             relevant.append(d)
     return relevant
 
@@ -120,7 +125,15 @@ def build_user_message(mr: MRAnalysisInput, relevant_diffs: list[FileDiff]) -> s
             parts.append("(NEW FILE)")
         elif d.deleted_file:
             parts.append("(DELETED)")
-        parts.append(f"```diff\n{d.diff[:2000]}\n```")
+        diff_content = d.diff
+        if len(diff_content) > MAX_DIFF_CHARS:
+            truncated_chars = len(diff_content) - MAX_DIFF_CHARS
+            diff_content = diff_content[:MAX_DIFF_CHARS] + f"\n[... truncated — {truncated_chars} additional chars omitted]"
+            logger.warning(
+                "Diff for %s truncated: %d chars omitted",
+                d.new_path, truncated_chars,
+            )
+        parts.append(f"```diff\n{diff_content}\n```")
 
     if mr.discussions:
         parts.append("\n## Review Discussions:")
@@ -175,13 +188,25 @@ def aggregate_perspectives(perspectives: list[PerspectiveResult]) -> MultiAgentR
 
     consensus = count >= 2  # 2/3 agree
 
-    conf_values = [p.classification.confidence for p in perspectives]
-    if Confidence.BORDERLINE in conf_values:
-        agg_confidence = Confidence.BORDERLINE
-    elif Confidence.MEDIUM in conf_values:
+    # Weighted confidence: use the confidence of the majority voters,
+    # not all voters, so a single BORDERLINE dissenter doesn't drag down
+    # a consensus of two HIGH-confidence perspectives.
+    majority_perspectives = [
+        p for p in perspectives if p.classification.significance == most_common_sig
+    ] if consensus else perspectives
+
+    conf_weights = {Confidence.HIGH: 3, Confidence.MEDIUM: 2, Confidence.BORDERLINE: 1}
+    total_weight = sum(
+        conf_weights[p.classification.confidence] for p in majority_perspectives
+    )
+    avg_weight = total_weight / len(majority_perspectives) if majority_perspectives else 2
+
+    if avg_weight >= 2.5:
+        agg_confidence = Confidence.HIGH
+    elif avg_weight >= 1.5:
         agg_confidence = Confidence.MEDIUM
     else:
-        agg_confidence = Confidence.HIGH
+        agg_confidence = Confidence.BORDERLINE
 
     return MultiAgentReview(
         perspectives=perspectives,
@@ -230,10 +255,23 @@ async def classify_mr(
 
     valid_results = [r for r in results if isinstance(r, PerspectiveResult)]
 
+    # Log specific errors for each failed perspective agent (#7)
+    for name_prompt, result in zip(perspectives_config, results):
+        if isinstance(result, Exception):
+            logger.error(
+                "Perspective agent '%s' failed: %s: %s",
+                name_prompt[0], type(result).__name__, result,
+            )
+
     if not valid_results:
+        error_details = "; ".join(
+            f"{name}: {type(r).__name__}"
+            for (name, _), r in zip(perspectives_config, results)
+            if isinstance(r, Exception)
+        )
         return MultiAgentReview(
             escalation_triggered=True,
-            escalation_reason="All perspective agents failed",
+            escalation_reason=f"All perspective agents failed ({error_details})",
         )
 
     return aggregate_perspectives(valid_results)
