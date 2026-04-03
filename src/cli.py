@@ -17,6 +17,9 @@ from src.services.mr_commenter import post_feedback
 from src.services.pipeline_checker import check_pipeline
 from src.services.scope_analyzer import analyze_scope
 from src.services.state_manager import StateManager
+from src.services.baseline_detector import check_baseline_exists, check_staleness
+from src.services.baseline_writer import archive_baseline, write_baseline
+from src.services.codebase_scanner import scan_repos
 
 
 @click.group()
@@ -250,6 +253,13 @@ def review_group(ctx, group_path, mr_state):
     state_path = arch_repo_dir / ".agent-state.json"
     state_manager = StateManager(state_path)
 
+    # US2: Auto-detect and generate baseline if missing
+    group = gitlab_client.gl.groups.get(group_path)
+    repo_paths = [p.path_with_namespace for p in group.projects.list(get_all=True)]
+    asyncio.run(ensure_baseline(
+        obj, gitlab_client, git_ops, state_manager, arch_repo_dir, repo_paths
+    ))
+
     click.echo(f"Fetching MRs from group {group_path} (state={mr_state})...")
     mrs = gitlab_client.list_group_mrs(group_path, state=mr_state)
     click.echo(f"Found {len(mrs)} MRs across group")
@@ -276,13 +286,102 @@ def review_group(ctx, group_path, mr_state):
     state_manager.save()
     click.echo(f"\nProcessed: {processed}, Skipped: {skipped}, Failed: {failed}")
 
+    # US3: Check baseline staleness after batch processing
+    if check_staleness(state_manager.state):
+        click.echo(click.style(
+            "\nBaseline may be stale — significant architectural changes detected since last generation.",
+            fg="yellow",
+        ))
+        click.echo("Run `adr-agent snapshot` to refresh the baseline.")
+
     if not obj["dry_run"]:
         files_to_commit = ["ARCHITECTURE_DECISION_LOG.md", ".agent-state.json"]
         if (arch_repo_dir / "adr").exists():
             files_to_commit.append("adr/")
+        if (arch_repo_dir / "ARCHITECTURE_BASELINE.md").exists():
+            files_to_commit.append("ARCHITECTURE_BASELINE.md")
         git_ops.stage_and_commit(arch_repo_dir, files_to_commit, f"docs: analyze MRs from group {group_path}")
         git_ops.push(arch_repo_dir)
         check_pipeline(gitlab_client, obj["arch_repo"])
+
+
+async def ensure_baseline(
+    obj: dict,
+    gitlab_client: GitLabClient,
+    git_ops: GitOps,
+    state_manager: StateManager,
+    arch_repo_dir: Path,
+    repo_paths: list[str],
+) -> None:
+    """Auto-generate baseline if missing (US2 integration)."""
+    status = check_baseline_exists(arch_repo_dir)
+    if status == "valid":
+        if obj["verbose"]:
+            click.echo("  Baseline exists and is valid — skipping generation")
+        return
+
+    click.echo(click.style(
+        f"  Baseline {status} — auto-generating before MR analysis...", fg="yellow"
+    ))
+    baseline = scan_repos(repo_paths, git_ops)
+    await write_baseline(
+        baseline, arch_repo_dir, obj["anthropic_key"], state_manager.state, obj["model"]
+    )
+    from datetime import datetime
+    state_manager.state.baseline_generated_at = datetime.utcnow()
+    state_manager.state.baseline_version += 1
+    state_manager.state.baseline_repos_scanned = repo_paths
+    click.echo(click.style("  Baseline generated successfully", fg="green"))
+
+
+@cli.command("snapshot")
+@click.argument("repo_paths", nargs=-1, required=True)
+@click.pass_context
+def snapshot(ctx, repo_paths):
+    """Generate an Architecture Baseline Document from codebase scan."""
+    obj = ctx.obj
+    gitlab_client = GitLabClient(obj["gitlab_url"], obj["gitlab_token"])
+    git_ops = GitOps(obj["gitlab_token"], obj["gitlab_url"])
+    arch_repo_dir = git_ops.clone_repo(obj["arch_repo"])
+    state_path = arch_repo_dir / ".agent-state.json"
+    state_manager = StateManager(state_path)
+
+    repo_list = list(repo_paths)
+    click.echo(f"Scanning {len(repo_list)} repositories...")
+
+    baseline = scan_repos(repo_list, git_ops)
+    click.echo(f"Found {len(baseline.services)} services, {len(baseline.communication_links)} communication links")
+
+    baseline_path = asyncio.run(
+        write_baseline(
+            baseline, arch_repo_dir, obj["anthropic_key"], state_manager.state, obj["model"]
+        )
+    )
+
+    from datetime import datetime
+    state_manager.state.baseline_generated_at = datetime.utcnow()
+    state_manager.state.baseline_version += 1
+    state_manager.state.baseline_repos_scanned = repo_list
+    state_manager.save()
+
+    click.echo(f"Baseline written to {baseline_path.name}")
+
+    if baseline.flagged_unknowns:
+        pending = [u for u in baseline.flagged_unknowns if u.status == "pending_review"]
+        if pending:
+            click.echo(click.style(
+                f"  {len(pending)} items flagged for human review", fg="yellow"
+            ))
+
+    if not obj["dry_run"]:
+        files = ["ARCHITECTURE_BASELINE.md", ".agent-state.json"]
+        git_ops.stage_and_commit(
+            arch_repo_dir, files, "docs: generate architecture baseline"
+        )
+        git_ops.push(arch_repo_dir)
+        check_pipeline(gitlab_client, obj["arch_repo"])
+
+    click.echo(click.style("Baseline snapshot complete", fg="green"))
 
 
 if __name__ == "__main__":

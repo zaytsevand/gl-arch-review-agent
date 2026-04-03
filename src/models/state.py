@@ -30,3 +30,6 @@ class ProcessingState(BaseModel):
     analyzed_mrs: dict[str, MRState] = Field(default_factory=dict)
     escalation_precedents: list[EscalationPrecedent] = Field(default_factory=list)
     adl_next_number: int = 1
+    baseline_generated_at: datetime | None = None
+    baseline_version: int = 0
+    baseline_repos_scanned: list[str] = Field(default_factory=list)
