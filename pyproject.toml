@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "adr-agent"
+version = "0.1.0"
+description = "Autonomous Architecture Decision Review Agent"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.40.0",
+    "python-gitlab>=4.0.0",
+    "click>=8.1.0",
+    "pydantic>=2.0.0",
+    "jinja2>=3.1.0",
+    "tenacity>=8.2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "respx>=0.21.0",
+    "httpx>=0.27.0",
+]
+
+[project.scripts]
+adr-agent = "src.cli:cli"
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

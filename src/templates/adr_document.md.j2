@@ -1,0 +1,30 @@
+# {{ adr.number }}. {{ adr.title }}
+
+Date: {{ adr.date }}
+Status: {{ adr.status }}
+Confidence: {{ adr.confidence }}
+Services: {{ adr.services | join(', ') }}
+{% for url in adr.source_mr_urls %}Source: {{ url }}
+{% endfor %}
+
+## Context
+
+{{ adr.context }}
+
+## Decision
+
+{{ adr.decision }}
+
+## Alternatives Considered
+{% if adr.alternatives %}
+{% for alt in adr.alternatives %}
+- **{{ alt.name }}**: {{ alt.reason_rejected }}
+{% endfor %}
+{% else %}
+None identified — this was a straightforward consequence of the existing architecture.
+{% endif %}
+
+## Consequences
+{% for consequence in adr.consequences %}
+- {{ consequence }}
+{% endfor %}
