@@ -1,0 +1,80 @@
+{
+  "version": "1.0",
+  "last_run": "2026-04-03T00:00:00",
+  "analyzed_mrs": {
+    "unlimit-test-agent/order-service!1": {
+      "project_path": "unlimit-test-agent/order-service",
+      "mr_iid": 1,
+      "last_commit_sha": "",
+      "description_hash": "",
+      "discussion_count": 5,
+      "pipeline_status": "success",
+      "significance": "non_significant",
+      "adl_entry_number": null,
+      "adr_file": null
+    },
+    "unlimit-test-agent/order-service!2": {
+      "project_path": "unlimit-test-agent/order-service",
+      "mr_iid": 2,
+      "last_commit_sha": "",
+      "description_hash": "",
+      "discussion_count": 5,
+      "pipeline_status": "success",
+      "significance": "moderate",
+      "adl_entry_number": 1,
+      "adr_file": null
+    },
+    "unlimit-test-agent/order-service!3": {
+      "project_path": "unlimit-test-agent/order-service",
+      "mr_iid": 3,
+      "last_commit_sha": "",
+      "description_hash": "",
+      "discussion_count": 6,
+      "pipeline_status": "success",
+      "significance": "high",
+      "adl_entry_number": 4,
+      "adr_file": "adr/001-api-v2-order-workflow-state-machine.md"
+    },
+    "unlimit-test-agent/payment-service!1": {
+      "project_path": "unlimit-test-agent/payment-service",
+      "mr_iid": 1,
+      "last_commit_sha": "",
+      "description_hash": "",
+      "discussion_count": 5,
+      "pipeline_status": "success",
+      "significance": "moderate",
+      "adl_entry_number": 2,
+      "adr_file": null
+    },
+    "unlimit-test-agent/payment-service!2": {
+      "project_path": "unlimit-test-agent/payment-service",
+      "mr_iid": 2,
+      "last_commit_sha": "",
+      "description_hash": "",
+      "discussion_count": 5,
+      "pipeline_status": "success",
+      "significance": "high",
+      "adl_entry_number": 3,
+      "adr_file": "adr/002-websocket-payment-notifications.md"
+    },
+    "unlimit-test-agent/payment-service!3": {
+      "project_path": "unlimit-test-agent/payment-service",
+      "mr_iid": 3,
+      "last_commit_sha": "",
+      "description_hash": "",
+      "discussion_count": 5,
+      "pipeline_status": "success",
+      "significance": "high",
+      "adl_entry_number": 5,
+      "adr_file": "adr/001-api-v2-order-workflow-state-machine.md"
+    }
+  },
+  "escalation_precedents": [],
+  "adl_next_number": 6,
+  "baseline_generated_at": "2026-04-03T00:00:00",
+  "baseline_version": 1,
+  "baseline_repos_scanned": [
+    "unlimit-test-agent/order-service",
+    "unlimit-test-agent/payment-service"
+  ]
+}
