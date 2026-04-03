@@ -14,13 +14,13 @@ MANDATORY_SECTIONS = [
 
 # File patterns that indicate infrastructure changes
 INFRA_FILE_PATTERNS = [
-    re.compile(r"Dockerfile", re.IGNORECASE),
-    re.compile(r"docker-compose", re.IGNORECASE),
+    re.compile(r"(?:^|/)Dockerfile(?:\.|$)", re.IGNORECASE),
+    re.compile(r"(?:^|/)docker-compose", re.IGNORECASE),
     re.compile(r"\.gitlab-ci\.yml$"),
-    re.compile(r"k8s/"),
-    re.compile(r"kubernetes/"),
-    re.compile(r"helm/"),
-    re.compile(r"terraform/"),
+    re.compile(r"(?:^|/)k8s/"),
+    re.compile(r"(?:^|/)kubernetes/"),
+    re.compile(r"(?:^|/)helm/"),
+    re.compile(r"(?:^|/)terraform/"),
     re.compile(r"\.tf$"),
 ]
 

@@ -111,3 +111,37 @@ def test_format_escalation_comment():
     assert "Escalation Required" in comment
     assert "Agent Assessments" in comment
     assert "Action Required" in comment
+
+
+def test_pattern_hash_uses_all_perspectives():
+    """Hash should differ when perspectives have different views."""
+    cls1 = SignificanceClassification(
+        significance=Significance.HIGH,
+        change_type=ChangeType.API_CHANGE,
+        confidence=Confidence.HIGH,
+        summary="test", rationale="test",
+        affected_services=["svc"],
+        relevant_files=["file.java"],
+    )
+    cls2 = SignificanceClassification(
+        significance=Significance.HIGH,
+        change_type=ChangeType.SECURITY,
+        confidence=Confidence.HIGH,
+        summary="test", rationale="test",
+        affected_services=["svc"],
+        relevant_files=["file.java"],
+    )
+    # Two perspectives, same files but different change_types
+    review_a = MultiAgentReview(
+        perspectives=[
+            PerspectiveResult(perspective="api", classification=cls1),
+            PerspectiveResult(perspective="risk", classification=cls1),
+        ],
+    )
+    review_b = MultiAgentReview(
+        perspectives=[
+            PerspectiveResult(perspective="api", classification=cls1),
+            PerspectiveResult(perspective="risk", classification=cls2),
+        ],
+    )
+    assert compute_pattern_hash(review_a) != compute_pattern_hash(review_b)

@@ -1,7 +1,4 @@
-from pathlib import Path
 from datetime import datetime
-
-import pytest
 
 from src.models.state import MRState, ProcessingState
 from src.services.baseline_detector import (
@@ -110,4 +107,46 @@ def test_staleness_above_threshold():
 
 def test_staleness_no_baseline_date():
     state = ProcessingState()
+    assert check_staleness(state) is False
+
+
+def test_staleness_infra_change_triggers():
+    """Infrastructure changes should trigger staleness even below high threshold."""
+    state = ProcessingState(
+        baseline_generated_at=datetime(2026, 4, 1),
+        analyzed_mrs={
+            "g/s!1": MRState(
+                project_path="g/s", mr_iid=1,
+                significance="moderate", change_type="infrastructure",
+            ),
+        },
+    )
+    assert check_staleness(state) is True
+
+
+def test_staleness_config_change_triggers():
+    """Config changes should trigger staleness."""
+    state = ProcessingState(
+        baseline_generated_at=datetime(2026, 4, 1),
+        analyzed_mrs={
+            "g/s!1": MRState(
+                project_path="g/s", mr_iid=1,
+                significance="moderate", change_type="config_change",
+            ),
+        },
+    )
+    assert check_staleness(state) is True
+
+
+def test_staleness_non_infra_change_no_trigger():
+    """Non-infra moderate changes should not trigger staleness."""
+    state = ProcessingState(
+        baseline_generated_at=datetime(2026, 4, 1),
+        analyzed_mrs={
+            "g/s!1": MRState(
+                project_path="g/s", mr_iid=1,
+                significance="moderate", change_type="api_change",
+            ),
+        },
+    )
     assert check_staleness(state) is False

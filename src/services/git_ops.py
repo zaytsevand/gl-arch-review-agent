@@ -16,6 +16,7 @@ class GitOps:
         self.token = token
         self.gitlab_url = gitlab_url
         self._temp_dirs: list[Path] = []
+        self._askpass_files: list[Path] = []
 
     def _git_env(self) -> dict[str, str]:
         """Return environment with GIT_ASKPASS for credential injection.
@@ -27,11 +28,13 @@ class GitOps:
             "#!/bin/sh\n"
             f'echo "{self.token}"'
         )
-        askpass_path = Path(tempfile.mktemp(prefix="adr-askpass-", suffix=".sh"))
-        askpass_path.write_text(askpass_script)
-        askpass_path.chmod(0o700)
+        fd, askpass_path = tempfile.mkstemp(prefix="adr-askpass-", suffix=".sh")
+        with os.fdopen(fd, "w") as f:
+            f.write(askpass_script)
+        os.chmod(askpass_path, 0o700)
+        self._askpass_files.append(Path(askpass_path))
         env = os.environ.copy()
-        env["GIT_ASKPASS"] = str(askpass_path)
+        env["GIT_ASKPASS"] = askpass_path
         env["GIT_TERMINAL_PROMPT"] = "0"
         return env
 
@@ -138,7 +141,7 @@ class GitOps:
             subprocess.run(
                 ["git", "add", f], cwd=repo_dir, check=True, capture_output=True
             )
-        result = subprocess.run(
+        subprocess.run(
             ["git", "commit", "-m", message],
             cwd=repo_dir,
             capture_output=True,
@@ -197,7 +200,10 @@ class GitOps:
             )
 
     def cleanup(self) -> None:
-        """Remove all temporary directories created by this instance."""
+        """Remove all temporary directories and askpass scripts created by this instance."""
         for d in self._temp_dirs:
             shutil.rmtree(d, ignore_errors=True)
         self._temp_dirs.clear()
+        for f in self._askpass_files:
+            f.unlink(missing_ok=True)
+        self._askpass_files.clear()

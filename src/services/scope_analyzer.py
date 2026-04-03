@@ -15,12 +15,22 @@ logger = logging.getLogger(__name__)
 
 TICKET_PATTERN = re.compile(r"(?<![A-Za-z/])([A-Z]{2,10}-\d+)")
 
+# Common false-positive prefixes that match the ticket pattern
+_TICKET_EXCLUDE = frozenset({
+    "HTTP", "HTTPS", "UTF", "ASCII", "SHA", "SSL", "TLS",
+    "TCP", "UDP", "RFC", "ISO", "IEEE",
+})
+
 
 def extract_ticket_refs(mr: MRAnalysisInput) -> list[TicketRef]:
     refs: list[TicketRef] = []
     seen: set[tuple[str, str]] = set()
 
     def _add(ticket_id: str, source: str) -> None:
+        # Skip known false-positive prefixes (HTTP-200, UTF-8, etc.)
+        prefix = ticket_id.split("-")[0]
+        if prefix in _TICKET_EXCLUDE:
+            return
         key = (ticket_id, source)
         if key not in seen:
             seen.add(key)

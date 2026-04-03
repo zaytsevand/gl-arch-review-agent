@@ -110,3 +110,25 @@ def test_empty_mr_no_tickets():
     mr = _make_mr(title="Fix typo", description="")
     refs = extract_ticket_refs(mr)
     assert len(refs) == 0
+
+
+def test_ticket_pattern_rejects_url_components():
+    """HTTPS-443 in a URL should not be treated as a ticket reference."""
+    mr = _make_mr(
+        title="Fix connection to https://service:443/api",
+        description="See HTTPS-443 redirect issue",
+    )
+    refs = extract_ticket_refs(mr)
+    # HTTPS-443 is preceded by "/" or is at URL boundary — should be filtered
+    # Only genuine tickets should be found
+    ticket_ids = [r.ticket_id for r in refs]
+    assert "HTTPS-443" not in ticket_ids
+
+
+def test_ticket_pattern_accepts_standard_tickets():
+    """Standard JIRA-style tickets should still be matched."""
+    mr = _make_mr(title="PROJ-123 implement feature", description="Related to TEAM-456")
+    refs = extract_ticket_refs(mr)
+    ticket_ids = [r.ticket_id for r in refs]
+    assert "PROJ-123" in ticket_ids
+    assert "TEAM-456" in ticket_ids

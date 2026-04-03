@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from src.models.gitlab_types import CommitInfo, MRAnalysisInput
+from src.models.gitlab_types import CommitInfo
 from src.services.state_manager import StateManager
 
 
@@ -95,3 +95,24 @@ def test_state_persists_json(state_path, state_manager, trivial_mr):
     data = json.loads(state_path.read_text())
     assert "analyzed_mrs" in data
     assert "unlimit-test-agent/order-service!1" in data["analyzed_mrs"]
+
+
+def test_save_uses_atomic_write(state_path, state_manager):
+    """State save should use atomic write (no partial files on crash)."""
+    state_manager.state.adl_next_number = 42
+    state_manager.save()
+
+    # Verify the file exists and has correct content
+    data = json.loads(state_path.read_text())
+    assert data["adl_next_number"] == 42
+
+    # Verify no .tmp files left behind
+    tmp_files = list(state_path.parent.glob("*.tmp"))
+    assert len(tmp_files) == 0
+
+
+def test_save_uses_timezone_aware_datetime(state_path, state_manager):
+    """last_run should be timezone-aware after save."""
+    state_manager.save()
+    assert state_manager.state.last_run is not None
+    assert state_manager.state.last_run.tzinfo is not None

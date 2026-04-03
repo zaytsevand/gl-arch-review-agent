@@ -1,6 +1,5 @@
 from src.models.classification import (
     Confidence,
-    MultiAgentReview,
     PerspectiveResult,
     Significance,
     SignificanceClassification,
@@ -120,7 +119,8 @@ def test_aggregate_borderline_confidence_propagates():
     ]
     review = aggregate_perspectives(perspectives)
     assert review.consensus is True
-    assert review.consensus_confidence == Confidence.BORDERLINE
+    # With weighted aggregation: 2 HIGH (3) + 1 BORDERLINE (1) = avg 2.33 → MEDIUM
+    assert review.consensus_confidence == Confidence.MEDIUM
 
 
 def test_build_user_message_includes_mr_metadata(significant_mr):
@@ -142,3 +142,57 @@ def test_build_user_message_includes_commits(significant_mr):
     relevant = filter_relevant_diffs(significant_mr.diffs)
     msg = build_user_message(significant_mr, relevant)
     assert "35765c1" in msg
+
+
+def test_diff_truncation_adds_marker():
+    """Truncated diffs should include a marker indicating omitted content."""
+    long_diff = "+" + "x" * 3000  # over MAX_DIFF_CHARS
+    diffs = [
+        FileDiff(
+            old_path="OrderController.java",
+            new_path="OrderController.java",
+            diff=long_diff,
+        )
+    ]
+    msg = build_user_message(
+        MRAnalysisInput(
+            project_id=1, project_path="g/s", mr_iid=1,
+            title="test", source_branch="f", diffs=diffs, commits=[],
+        ),
+        diffs,
+    )
+    assert "truncated" in msg
+    assert "additional chars omitted" in msg
+
+
+def test_aggregate_weighted_confidence_all_high():
+    """3 HIGH-confidence votes → HIGH."""
+    perspectives = [
+        _make_perspective("api", Significance.HIGH, Confidence.HIGH),
+        _make_perspective("dep", Significance.HIGH, Confidence.HIGH),
+        _make_perspective("risk", Significance.HIGH, Confidence.HIGH),
+    ]
+    review = aggregate_perspectives(perspectives)
+    assert review.consensus_confidence == Confidence.HIGH
+
+
+def test_aggregate_weighted_confidence_all_borderline():
+    """3 BORDERLINE votes → BORDERLINE."""
+    perspectives = [
+        _make_perspective("api", Significance.MODERATE, Confidence.BORDERLINE),
+        _make_perspective("dep", Significance.MODERATE, Confidence.BORDERLINE),
+        _make_perspective("risk", Significance.MODERATE, Confidence.BORDERLINE),
+    ]
+    review = aggregate_perspectives(perspectives)
+    assert review.consensus_confidence == Confidence.BORDERLINE
+
+
+def test_aggregate_weighted_two_high_one_medium():
+    """2 HIGH + 1 MEDIUM → HIGH (avg 2.67)."""
+    perspectives = [
+        _make_perspective("api", Significance.MODERATE, Confidence.HIGH),
+        _make_perspective("dep", Significance.MODERATE, Confidence.HIGH),
+        _make_perspective("risk", Significance.MODERATE, Confidence.MEDIUM),
+    ]
+    review = aggregate_perspectives(perspectives)
+    assert review.consensus_confidence == Confidence.HIGH
