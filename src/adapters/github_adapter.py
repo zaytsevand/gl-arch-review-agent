@@ -40,10 +40,12 @@ class GitHubAdapter(VCSClient):
             )
         self.url = url
         self.token = token
-        base_url = None
-        if url and "github.com" not in url:
-            base_url = url.rstrip("/") + "/api/v3"
-        self.gh = Github(login_or_token=token, base_url=base_url) if base_url else Github(login_or_token=token)
+    # Simplify: instantiate with base_url only for GitHub Enterprise
+        base_url = url.rstrip("/") + "/api/v3" if url and "github.com" not in url else None
+        if base_url:
+            self.gh = Github(login_or_token=token, base_url=base_url)
+        else:
+            self.gh = Github(login_or_token=token)
 
     # -- VCSClient implementation -------------------------------------------
 

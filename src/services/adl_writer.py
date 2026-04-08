@@ -149,11 +149,7 @@ def read_ci_config(repo_dir: Path) -> dict:
     # Check GitHub Actions workflows
     workflows_dir = repo_dir / ".github" / "workflows"
     if workflows_dir.is_dir():
-        for wf in workflows_dir.glob("*.yml"):
-            wf_content = wf.read_text()
-            disabled_matches = re.findall(r"--disable\s+(MD\d+)", wf_content)
-            config["disabled_rules"].extend(disabled_matches)
-        for wf in workflows_dir.glob("*.yaml"):
+        for wf in list(workflows_dir.glob("*.yml")) + list(workflows_dir.glob("*.yaml")):
             wf_content = wf.read_text()
             disabled_matches = re.findall(r"--disable\s+(MD\d+)", wf_content)
             config["disabled_rules"].extend(disabled_matches)
