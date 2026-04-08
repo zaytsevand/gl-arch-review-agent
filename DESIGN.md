@@ -8,6 +8,20 @@ Each stage is a standalone service with Pydantic models as contracts between sta
 
 ## Key Architectural Decisions
 
+### 0. VCS Abstraction Layer (Adapter Pattern)
+
+The agent supports both GitLab and GitHub through a platform-agnostic adapter layer:
+
+- **`src/adapters/vcs_types.py`**: Platform-neutral data models (`PullRequest`, `FileDiff`, etc.) replacing the original GitLab-specific types.
+- **`src/adapters/vcs_client.py`**: Abstract `VCSClient` ABC defining the interface all adapters must implement.
+- **`src/adapters/gitlab_adapter.py`** / **`github_adapter.py`**: Platform-specific implementations using `python-gitlab` and `PyGithub` SDKs respectively.
+- **`src/adapters/vcs_factory.py`**: Factory function that instantiates the correct adapter based on a provider string (`"gitlab"` or `"github"`).
+- **`src/adapters/git_credential.py`**: Platform-aware credential formatting for clone URLs.
+
+**Why**: The original codebase had ~85% GitLab coupling. Extracting a generic interface enables supporting multiple VCS platforms without modifying core analysis logic. The Adapter Pattern was chosen because each VCS platform has a fundamentally different API but provides the same logical operations.
+
+**Backward compatibility**: `src/models/gitlab_types.py` re-exports `MRAnalysisInput` as a subclass of `PullRequest` with legacy field name mapping. `src/services/gitlab_client.py` re-exports `GitLabAdapter` as `GitLabClient`. Existing CLI options (`--gitlab-url`, `--gitlab-token`) and environment variables (`GITLAB_URL`, `GITLAB_TOKEN`) still work as deprecated aliases.
+
 ### 1. Multi-Perspective Classification (instead of single-prompt)
 
 For each MR, three LLM calls run in parallel with different analysis lenses:

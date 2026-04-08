@@ -5,7 +5,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from src.models.gitlab_types import MRAnalysisInput
+from src.adapters.vcs_types import PullRequest
 from src.models.state import MRState, ProcessingState
 
 
@@ -29,8 +29,8 @@ class StateManager:
     def mr_key(self, project_path: str, mr_iid: int) -> str:
         return f"{project_path}!{mr_iid}"
 
-    def has_changed(self, mr: MRAnalysisInput) -> bool:
-        key = self.mr_key(mr.project_path, mr.mr_iid)
+    def has_changed(self, mr: PullRequest) -> bool:
+        key = self.mr_key(mr.repo_path, mr.pr_id)
         prev = self.state.analyzed_mrs.get(key)
         if prev is None:
             return True
@@ -43,27 +43,27 @@ class StateManager:
             prev.last_commit_sha != latest_sha
             or prev.description_hash != desc_hash
             or prev.discussion_count != disc_count
-            or prev.pipeline_status != mr.pipeline_status
+            or prev.pipeline_status != mr.ci_status
         )
 
     def record_analysis(
         self,
-        mr: MRAnalysisInput,
+        mr: PullRequest,
         significance: str,
         adl_entry_number: int | None = None,
         adr_file: str | None = None,
     ) -> None:
-        key = self.mr_key(mr.project_path, mr.mr_iid)
+        key = self.mr_key(mr.repo_path, mr.pr_id)
         latest_sha = mr.commits[0].sha if mr.commits else ""
         desc_hash = hashlib.sha256(mr.description.encode()).hexdigest()[:16]
 
         self.state.analyzed_mrs[key] = MRState(
-            project_path=mr.project_path,
-            mr_iid=mr.mr_iid,
+            project_path=mr.repo_path,
+            mr_iid=mr.pr_id,
             last_commit_sha=latest_sha,
             description_hash=desc_hash,
             discussion_count=len(mr.discussions),
-            pipeline_status=mr.pipeline_status,
+            pipeline_status=mr.ci_status,
             significance=significance,
             adl_entry_number=adl_entry_number,
             adr_file=adr_file,

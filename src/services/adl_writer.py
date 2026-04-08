@@ -138,11 +138,25 @@ def write_adl(
 
 def read_ci_config(repo_dir: Path) -> dict:
     config: dict = {"disabled_rules": []}
+
+    # Check GitLab CI
     ci_path = repo_dir / ".gitlab-ci.yml"
     if ci_path.exists():
         ci_content = ci_path.read_text()
         disabled_matches = re.findall(r"--disable\s+(MD\d+)", ci_content)
         config["disabled_rules"].extend(disabled_matches)
+
+    # Check GitHub Actions workflows
+    workflows_dir = repo_dir / ".github" / "workflows"
+    if workflows_dir.is_dir():
+        for wf in workflows_dir.glob("*.yml"):
+            wf_content = wf.read_text()
+            disabled_matches = re.findall(r"--disable\s+(MD\d+)", wf_content)
+            config["disabled_rules"].extend(disabled_matches)
+        for wf in workflows_dir.glob("*.yaml"):
+            wf_content = wf.read_text()
+            disabled_matches = re.findall(r"--disable\s+(MD\d+)", wf_content)
+            config["disabled_rules"].extend(disabled_matches)
 
     markdownlint_path = repo_dir / ".markdownlint.json"
     if markdownlint_path.exists():

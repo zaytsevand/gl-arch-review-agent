@@ -1,53 +1,60 @@
+"""Backward-compatibility shim — re-exports from ``src.adapters.vcs_types``.
+
+New code should import directly from ``src.adapters.vcs_types`` instead.
+``MRAnalysisInput`` is an alias for ``PullRequest`` with field aliases to
+keep existing callers working.
+"""
+
 from __future__ import annotations
 
-from datetime import datetime
+from src.adapters.vcs_types import (
+    CommitInfo,
+    Discussion,
+    FileDiff,
+    Note,
+    PullRequest,
+)
 
-from pydantic import BaseModel
-
-
-class Note(BaseModel):
-    author: str
-    body: str
-    created_at: datetime
-    system: bool = False
-
-
-class Discussion(BaseModel):
-    id: str
-    notes: list[Note]
-    resolved: bool = False
-    file_path: str | None = None
-    line_number: int | None = None
+__all__ = [
+    "CommitInfo",
+    "Discussion",
+    "FileDiff",
+    "MRAnalysisInput",
+    "Note",
+]
 
 
-class FileDiff(BaseModel):
-    old_path: str
-    new_path: str
-    diff: str
-    new_file: bool = False
-    deleted_file: bool = False
-    renamed_file: bool = False
+class MRAnalysisInput(PullRequest):
+    """Legacy alias.  Accepts both old and new field names."""
 
+    model_config = {"populate_by_name": True}
 
-class CommitInfo(BaseModel):
-    sha: str
-    title: str
-    message: str = ""
-    authored_date: datetime | None = None
+    # Accept legacy field names via __init__ override
+    def __init__(self, **data):
+        # Map legacy field names → new field names
+        if "project_id" in data and "repo_id" not in data:
+            data["repo_id"] = data.pop("project_id")
+        if "project_path" in data and "repo_path" not in data:
+            data["repo_path"] = data.pop("project_path")
+        if "mr_iid" in data and "pr_id" not in data:
+            data["pr_id"] = data.pop("mr_iid")
+        if "pipeline_status" in data and "ci_status" not in data:
+            data["ci_status"] = data.pop("pipeline_status")
+        super().__init__(**data)
 
+    # Expose legacy property names for reading
+    @property
+    def project_id(self) -> int:
+        return self.repo_id
 
-class MRAnalysisInput(BaseModel):
-    project_id: int
-    project_path: str
-    mr_iid: int
-    title: str
-    description: str = ""
-    source_branch: str
-    target_branch: str = "main"
-    state: str = "opened"
-    author: str = ""
-    diffs: list[FileDiff] = []
-    discussions: list[Discussion] = []
-    pipeline_status: str = ""
-    commits: list[CommitInfo] = []
-    web_url: str = ""
+    @property
+    def project_path(self) -> str:
+        return self.repo_path
+
+    @property
+    def mr_iid(self) -> int:
+        return self.pr_id
+
+    @property
+    def pipeline_status(self) -> str:
+        return self.ci_status

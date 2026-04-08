@@ -4,11 +4,14 @@ import time
 
 import click
 
-from src.services.gitlab_client import GitLabClient
+from src.adapters.vcs_client import VCSClient
+from src.adapters.vcs_types import CIStatus
+
+_TERMINAL_STATUSES = {CIStatus.SUCCESS, CIStatus.FAILURE, CIStatus.CANCELLED}
 
 
 def check_pipeline(
-    gitlab_client: GitLabClient,
+    vcs_client: VCSClient,
     project_path: str,
     ref: str = "main",
     timeout_seconds: int = 300,
@@ -16,13 +19,13 @@ def check_pipeline(
 ) -> str:
     elapsed = 0
     while elapsed < timeout_seconds:
-        status = gitlab_client.get_pipeline_status(project_path, ref)
+        status = vcs_client.get_ci_status(project_path, ref)
 
-        if status in ("success", "failed", "canceled", "skipped"):
-            if status != "success":
+        if status in _TERMINAL_STATUSES:
+            if status != CIStatus.SUCCESS:
                 click.echo(
                     click.style(
-                        f"Pipeline {status} for {project_path} on {ref}",
+                        f"Pipeline {status.value} for {project_path} on {ref}",
                         fg="red",
                     )
                 )
@@ -33,9 +36,9 @@ def check_pipeline(
                         fg="green",
                     )
                 )
-            return status
+            return status.value
 
-        if status == "unknown":
+        if status == CIStatus.UNKNOWN:
             click.echo(f"No pipeline found for {project_path} on {ref}")
             return "unknown"
 

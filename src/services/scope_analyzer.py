@@ -4,14 +4,14 @@ import re
 from pathlib import Path
 
 from src.models.classification import BlameEntry, ChangeScope, RelatedMR, TicketRef
-from src.models.gitlab_types import MRAnalysisInput
+from src.adapters.vcs_types import PullRequest
+from src.adapters.vcs_client import VCSClient
 from src.services.git_ops import GitOps
-from src.services.gitlab_client import GitLabClient
 
 TICKET_PATTERN = re.compile(r"[A-Z]{2,10}-\d+")
 
 
-def extract_ticket_refs(mr: MRAnalysisInput) -> list[TicketRef]:
+def extract_ticket_refs(mr: PullRequest) -> list[TicketRef]:
     refs: list[TicketRef] = []
     seen: set[tuple[str, str]] = set()
 
@@ -23,7 +23,7 @@ def extract_ticket_refs(mr: MRAnalysisInput) -> list[TicketRef]:
                 TicketRef(
                     ticket_id=ticket_id,
                     source=source,
-                    project_path=mr.project_path,
+                    project_path=mr.repo_path,
                 )
             )
 
@@ -46,8 +46,8 @@ def extract_ticket_refs(mr: MRAnalysisInput) -> list[TicketRef]:
 
 def find_related_mrs(
     ticket_refs: list[TicketRef],
-    current_mr: MRAnalysisInput,
-    gitlab_client: GitLabClient,
+    current_mr: PullRequest,
+    vcs_client: VCSClient,
     group_path: str,
 ) -> list[RelatedMR]:
     related: list[RelatedMR] = []
@@ -56,27 +56,24 @@ def find_related_mrs(
     if not ticket_ids:
         return related
 
-    group = gitlab_client.gl.groups.get(group_path)
-    projects = group.projects.list(get_all=True)
+    repo_paths = vcs_client.list_org_repos(group_path)
 
-    for project in projects:
-        proj_path = project.path_with_namespace
-        if proj_path == current_mr.project_path:
+    for repo_path in repo_paths:
+        if repo_path == current_mr.repo_path:
             continue
 
         try:
-            proj = gitlab_client.gl.projects.get(proj_path)
-            mrs = proj.mergerequests.list(state="all", per_page=50)
-            for mr in mrs:
+            prs = vcs_client.list_pull_requests(repo_path, state="all")
+            for pr in prs:
                 for ticket_id in ticket_ids:
-                    if ticket_id in (mr.title or "") or ticket_id in (
-                        mr.description or ""
+                    if ticket_id in (pr.title or "") or ticket_id in (
+                        pr.description or ""
                     ):
                         related.append(
                             RelatedMR(
-                                project_path=proj_path,
-                                mr_iid=mr.iid,
-                                title=mr.title,
+                                project_path=repo_path,
+                                mr_iid=pr.pr_id,
+                                title=pr.title,
                                 shared_ticket=ticket_id,
                             )
                         )
@@ -87,7 +84,7 @@ def find_related_mrs(
     return related
 
 
-def extract_code_dependencies(mr: MRAnalysisInput) -> list[str]:
+def extract_code_dependencies(mr: PullRequest) -> list[str]:
     deps: set[str] = set()
 
     for diff in mr.diffs:
@@ -111,7 +108,7 @@ def extract_code_dependencies(mr: MRAnalysisInput) -> list[str]:
 
 
 def run_blame_analysis(
-    mr: MRAnalysisInput, git_ops: GitOps, repo_dir: Path
+    mr: PullRequest, git_ops: GitOps, repo_dir: Path
 ) -> list[BlameEntry]:
     entries: list[BlameEntry] = []
 
@@ -143,8 +140,8 @@ def run_blame_analysis(
 
 
 def analyze_scope(
-    mr: MRAnalysisInput,
-    gitlab_client: GitLabClient | None = None,
+    mr: PullRequest,
+    vcs_client: VCSClient | None = None,
     git_ops: GitOps | None = None,
     repo_dir: Path | None = None,
     group_path: str | None = None,
@@ -153,8 +150,8 @@ def analyze_scope(
     code_deps = extract_code_dependencies(mr)
 
     related_mrs: list[RelatedMR] = []
-    if gitlab_client and group_path:
-        related_mrs = find_related_mrs(ticket_refs, mr, gitlab_client, group_path)
+    if vcs_client and group_path:
+        related_mrs = find_related_mrs(ticket_refs, mr, vcs_client, group_path)
 
     blame_history: list[BlameEntry] = []
     if git_ops and repo_dir:

@@ -6,35 +6,77 @@ from pathlib import Path
 
 import click
 
+from src.adapters.vcs_client import VCSClient
+from src.adapters.vcs_factory import create_vcs_client
 from src.models.classification import Significance
-from src.services.adl_writer import read_ci_config, write_adl
+from src.services.adl_writer import write_adl
 from src.services.adr_writer import write_adr
 from src.services.classifier import classify_mr
 from src.services.escalation import evaluate_escalation, format_escalation_comment
 from src.services.git_ops import GitOps
-from src.services.gitlab_client import GitLabClient
 from src.services.mr_commenter import post_feedback
 from src.services.pipeline_checker import check_pipeline
 from src.services.scope_analyzer import analyze_scope
 from src.services.state_manager import StateManager
 from src.services.baseline_detector import check_baseline_exists, check_staleness
-from src.services.baseline_writer import archive_baseline, write_baseline
+from src.services.baseline_writer import write_baseline
 from src.services.codebase_scanner import scan_repos
 
 
+def _pr_separator(provider: str) -> str:
+    """Return the separator char used in PR references: ``!`` for GitLab, ``#`` for GitHub."""
+    return "#" if provider == "github" else "!"
+
+
 @click.group()
-@click.option("--gitlab-url", envvar="GITLAB_URL", default="https://gitlab.com")
-@click.option("--gitlab-token", envvar="GITLAB_TOKEN", required=True)
+@click.option(
+    "--vcs-provider",
+    envvar="VCS_PROVIDER",
+    default="gitlab",
+    type=click.Choice(["gitlab", "github"]),
+    help="VCS platform (gitlab or github)",
+)
+@click.option("--vcs-url", envvar="VCS_URL", default=None, help="VCS instance URL")
+@click.option("--vcs-token", envvar="VCS_TOKEN", default=None, help="VCS access token")
+# Backward-compatible aliases
+@click.option("--gitlab-url", envvar="GITLAB_URL", default=None, hidden=True)
+@click.option("--gitlab-token", envvar="GITLAB_TOKEN", default=None, hidden=True)
 @click.option("--anthropic-key", envvar="ANTHROPIC_API_KEY", required=True)
 @click.option("--arch-repo", required=True, help="Path of architecture-decisions repo")
 @click.option("--model", default="claude-sonnet-4-6", help="LLM model for analysis")
 @click.option("--dry-run", is_flag=True, help="Analyze without committing or commenting")
 @click.option("--verbose", is_flag=True, help="Show classification reasoning")
 @click.pass_context
-def cli(ctx, gitlab_url, gitlab_token, anthropic_key, arch_repo, model, dry_run, verbose):
+def cli(
+    ctx,
+    vcs_provider,
+    vcs_url,
+    vcs_token,
+    gitlab_url,
+    gitlab_token,
+    anthropic_key,
+    arch_repo,
+    model,
+    dry_run,
+    verbose,
+):
     ctx.ensure_object(dict)
-    ctx.obj["gitlab_url"] = gitlab_url
-    ctx.obj["gitlab_token"] = gitlab_token
+
+    # Resolve token: --vcs-token takes priority, fall back to --gitlab-token
+    token = vcs_token or gitlab_token
+    if not token:
+        raise click.UsageError(
+            "A VCS token is required. Set --vcs-token / VCS_TOKEN "
+            "(or --gitlab-token / GITLAB_TOKEN for backward compatibility)."
+        )
+
+    # Resolve URL: --vcs-url takes priority, fall back to --gitlab-url, then provider defaults
+    default_urls = {"gitlab": "https://gitlab.com", "github": "https://github.com"}
+    url = vcs_url or gitlab_url or default_urls.get(vcs_provider, "https://gitlab.com")
+
+    ctx.obj["vcs_provider"] = vcs_provider
+    ctx.obj["vcs_url"] = url
+    ctx.obj["vcs_token"] = token
     ctx.obj["anthropic_key"] = anthropic_key
     ctx.obj["arch_repo"] = arch_repo
     ctx.obj["model"] = model
@@ -46,29 +88,30 @@ async def process_single_mr(
     project_path: str,
     mr_iid: int,
     ctx_obj: dict,
-    gitlab_client: GitLabClient,
+    vcs_client: VCSClient,
     git_ops: GitOps,
     state_manager: StateManager,
     arch_repo_dir: Path,
     group_path: str | None = None,
 ) -> bool:
-    mr = gitlab_client.get_mr(project_path, mr_iid)
+    sep = _pr_separator(ctx_obj["vcs_provider"])
+    mr = vcs_client.get_pull_request(project_path, mr_iid)
 
     if not state_manager.has_changed(mr):
         if ctx_obj["verbose"]:
-            click.echo(f"  Skipping {project_path}!{mr_iid} — no changes since last run")
+            click.echo(f"  Skipping {project_path}{sep}{mr_iid} — no changes since last run")
         return True
 
-    click.echo(f"  Analyzing {project_path}!{mr_iid}: {mr.title}")
+    click.echo(f"  Analyzing {project_path}{sep}{mr_iid}: {mr.title}")
 
     scope = analyze_scope(
-        mr, gitlab_client=gitlab_client, group_path=group_path
+        mr, vcs_client=vcs_client, group_path=group_path
     )
 
     if ctx_obj["verbose"] and scope.ticket_references:
         click.echo(f"    Ticket refs: {[t.ticket_id for t in scope.ticket_references]}")
         if scope.related_mrs:
-            click.echo(f"    Related MRs: {[f'{r.project_path}!{r.mr_iid}' for r in scope.related_mrs]}")
+            click.echo(f"    Related MRs: {[f'{r.project_path}{sep}{r.mr_iid}' for r in scope.related_mrs]}")
 
     review = await classify_mr(mr, ctx_obj["anthropic_key"], ctx_obj["model"])
 
@@ -87,7 +130,7 @@ async def process_single_mr(
 
     if review.escalation_triggered and not ctx_obj["dry_run"]:
         comment = format_escalation_comment(review)
-        gitlab_client.post_mr_note(project_path, mr_iid, comment)
+        vcs_client.post_comment(project_path, mr_iid, comment)
         click.echo(click.style(f"    ESCALATED: {review.escalation_reason}", fg="yellow"))
         state_manager.record_analysis(mr, "escalated")
         return True
@@ -144,7 +187,7 @@ async def process_single_mr(
 
     if not ctx_obj["dry_run"]:
         post_feedback(
-            mr, review, gitlab_client,
+            mr, review, vcs_client,
             adl_entry_number=adl_entry_number, adr_link=adr_link,
         )
 
@@ -155,27 +198,30 @@ async def process_single_mr(
 @click.argument("mr_ref")
 @click.pass_context
 def review_mr(ctx, mr_ref):
-    """Analyze a single merge request."""
-    parts = mr_ref.replace("!", "/").rsplit("/", 1)
+    """Analyze a single merge/pull request."""
+    obj = ctx.obj
+    provider = obj["vcs_provider"]
+    sep = _pr_separator(provider)
+
+    parts = mr_ref.replace(sep, "/").rsplit("/", 1)
     if len(parts) != 2:
-        click.echo("Usage: adr-agent review-mr <project_path>!<mr_iid>", err=True)
+        click.echo(f"Usage: adr-agent review-mr <project_path>{sep}<pr_id>", err=True)
         sys.exit(3)
 
     project_path = parts[0]
     mr_iid = int(parts[1])
 
-    obj = ctx.obj
-    gitlab_client = GitLabClient(obj["gitlab_url"], obj["gitlab_token"])
-    git_ops = GitOps(obj["gitlab_token"], obj["gitlab_url"])
+    vcs_client = create_vcs_client(provider, obj["vcs_url"], obj["vcs_token"])
+    git_ops = GitOps(obj["vcs_token"], obj["vcs_url"], provider)
     arch_repo_dir = git_ops.clone_repo(obj["arch_repo"])
     state_path = arch_repo_dir / ".agent-state.json"
     state_manager = StateManager(state_path)
 
     group_path = "/".join(project_path.split("/")[:-1]) or None
 
-    success = asyncio.run(
+    asyncio.run(
         process_single_mr(
-            project_path, mr_iid, obj, gitlab_client, git_ops,
+            project_path, mr_iid, obj, vcs_client, git_ops,
             state_manager, arch_repo_dir, group_path,
         )
     )
@@ -192,10 +238,10 @@ def review_mr(ctx, mr_ref):
 
         git_ops.stage_and_commit(
             arch_repo_dir, files_to_commit,
-            f"docs: analyze {project_path}!{mr_iid}",
+            f"docs: analyze {project_path}{sep}{mr_iid}",
         )
         git_ops.push(arch_repo_dir)
-        check_pipeline(gitlab_client, obj["arch_repo"])
+        check_pipeline(vcs_client, obj["arch_repo"])
 
 
 @cli.command("review-repo")
@@ -203,10 +249,13 @@ def review_mr(ctx, mr_ref):
 @click.option("--state", "mr_state", default="all", type=click.Choice(["opened", "merged", "all"]))
 @click.pass_context
 def review_repo(ctx, repo_path, mr_state):
-    """Analyze all MRs in a repository."""
+    """Analyze all MRs/PRs in a repository."""
     obj = ctx.obj
-    gitlab_client = GitLabClient(obj["gitlab_url"], obj["gitlab_token"])
-    git_ops = GitOps(obj["gitlab_token"], obj["gitlab_url"])
+    provider = obj["vcs_provider"]
+    sep = _pr_separator(provider)
+
+    vcs_client = create_vcs_client(provider, obj["vcs_url"], obj["vcs_token"])
+    git_ops = GitOps(obj["vcs_token"], obj["vcs_url"], provider)
     arch_repo_dir = git_ops.clone_repo(obj["arch_repo"])
     state_path = arch_repo_dir / ".agent-state.json"
     state_manager = StateManager(state_path)
@@ -214,19 +263,19 @@ def review_repo(ctx, repo_path, mr_state):
     group_path = "/".join(repo_path.split("/")[:-1]) or None
 
     click.echo(f"Fetching MRs from {repo_path} (state={mr_state})...")
-    mrs = gitlab_client.list_mrs(repo_path, state=mr_state)
+    mrs = vcs_client.list_pull_requests(repo_path, state=mr_state)
     click.echo(f"Found {len(mrs)} MRs")
 
     for mr in mrs:
         try:
             asyncio.run(
                 process_single_mr(
-                    mr.project_path, mr.mr_iid, obj, gitlab_client, git_ops,
+                    mr.repo_path, mr.pr_id, obj, vcs_client, git_ops,
                     state_manager, arch_repo_dir, group_path,
                 )
             )
         except Exception as e:
-            click.echo(click.style(f"  FAILED: {mr.project_path}!{mr.mr_iid} — {e}", fg="red"))
+            click.echo(click.style(f"  FAILED: {mr.repo_path}{sep}{mr.pr_id} — {e}", fg="red"))
             continue
 
     state_manager.save()
@@ -237,7 +286,7 @@ def review_repo(ctx, repo_path, mr_state):
             files_to_commit.append("adr/")
         git_ops.stage_and_commit(arch_repo_dir, files_to_commit, f"docs: analyze MRs from {repo_path}")
         git_ops.push(arch_repo_dir)
-        check_pipeline(gitlab_client, obj["arch_repo"])
+        check_pipeline(vcs_client, obj["arch_repo"])
 
 
 @cli.command("review-group")
@@ -245,23 +294,25 @@ def review_repo(ctx, repo_path, mr_state):
 @click.option("--state", "mr_state", default="all", type=click.Choice(["opened", "merged", "all"]))
 @click.pass_context
 def review_group(ctx, group_path, mr_state):
-    """Analyze all MRs across all repos in a GitLab group."""
+    """Analyze all MRs/PRs across all repos in a GitLab group or GitHub org."""
     obj = ctx.obj
-    gitlab_client = GitLabClient(obj["gitlab_url"], obj["gitlab_token"])
-    git_ops = GitOps(obj["gitlab_token"], obj["gitlab_url"])
+    provider = obj["vcs_provider"]
+    sep = _pr_separator(provider)
+
+    vcs_client = create_vcs_client(provider, obj["vcs_url"], obj["vcs_token"])
+    git_ops = GitOps(obj["vcs_token"], obj["vcs_url"], provider)
     arch_repo_dir = git_ops.clone_repo(obj["arch_repo"])
     state_path = arch_repo_dir / ".agent-state.json"
     state_manager = StateManager(state_path)
 
     # US2: Auto-detect and generate baseline if missing
-    group = gitlab_client.gl.groups.get(group_path)
-    repo_paths = [p.path_with_namespace for p in group.projects.list(get_all=True)]
+    repo_paths = vcs_client.list_org_repos(group_path)
     asyncio.run(ensure_baseline(
-        obj, gitlab_client, git_ops, state_manager, arch_repo_dir, repo_paths
+        obj, vcs_client, git_ops, state_manager, arch_repo_dir, repo_paths
     ))
 
     click.echo(f"Fetching MRs from group {group_path} (state={mr_state})...")
-    mrs = gitlab_client.list_group_mrs(group_path, state=mr_state)
+    mrs = vcs_client.list_org_pull_requests(group_path, state=mr_state)
     click.echo(f"Found {len(mrs)} MRs across group")
 
     processed = 0
@@ -273,13 +324,13 @@ def review_group(ctx, group_path, mr_state):
             try:
                 asyncio.run(
                     process_single_mr(
-                        mr.project_path, mr.mr_iid, obj, gitlab_client, git_ops,
+                        mr.repo_path, mr.pr_id, obj, vcs_client, git_ops,
                         state_manager, arch_repo_dir, group_path,
                     )
                 )
                 processed += 1
             except Exception as e:
-                click.echo(click.style(f"\n  FAILED: {mr.project_path}!{mr.mr_iid} — {e}", fg="red"))
+                click.echo(click.style(f"\n  FAILED: {mr.repo_path}{sep}{mr.pr_id} — {e}", fg="red"))
                 failed += 1
                 continue
 
@@ -302,12 +353,12 @@ def review_group(ctx, group_path, mr_state):
             files_to_commit.append("ARCHITECTURE_BASELINE.md")
         git_ops.stage_and_commit(arch_repo_dir, files_to_commit, f"docs: analyze MRs from group {group_path}")
         git_ops.push(arch_repo_dir)
-        check_pipeline(gitlab_client, obj["arch_repo"])
+        check_pipeline(vcs_client, obj["arch_repo"])
 
 
 async def ensure_baseline(
     obj: dict,
-    gitlab_client: GitLabClient,
+    vcs_client: VCSClient,
     git_ops: GitOps,
     state_manager: StateManager,
     arch_repo_dir: Path,
@@ -340,8 +391,10 @@ async def ensure_baseline(
 def snapshot(ctx, repo_paths):
     """Generate an Architecture Baseline Document from codebase scan."""
     obj = ctx.obj
-    gitlab_client = GitLabClient(obj["gitlab_url"], obj["gitlab_token"])
-    git_ops = GitOps(obj["gitlab_token"], obj["gitlab_url"])
+    provider = obj["vcs_provider"]
+
+    vcs_client = create_vcs_client(provider, obj["vcs_url"], obj["vcs_token"])
+    git_ops = GitOps(obj["vcs_token"], obj["vcs_url"], provider)
     arch_repo_dir = git_ops.clone_repo(obj["arch_repo"])
     state_path = arch_repo_dir / ".agent-state.json"
     state_manager = StateManager(state_path)
@@ -379,9 +432,130 @@ def snapshot(ctx, repo_paths):
             arch_repo_dir, files, "docs: generate architecture baseline"
         )
         git_ops.push(arch_repo_dir)
-        check_pipeline(gitlab_client, obj["arch_repo"])
+        check_pipeline(vcs_client, obj["arch_repo"])
 
     click.echo(click.style("Baseline snapshot complete", fg="green"))
+
+
+@cli.command("init")
+@click.option(
+    "--provider",
+    default=None,
+    type=click.Choice(["gitlab", "github"]),
+    help="VCS platform to configure",
+)
+@click.option(
+    "--target-dir",
+    default=".",
+    type=click.Path(exists=True),
+    help="Target repository directory (default: current directory)",
+)
+@click.pass_context
+def init_cmd(ctx, provider, target_dir):
+    """Bootstrap ADR agent configuration in a repository.
+
+    Generates the appropriate CI/CD config and a minimal .adr-agent.yml
+    settings file for the chosen provider.
+    """
+    provider = provider or ctx.obj.get("vcs_provider", "gitlab")
+    target = Path(target_dir).resolve()
+
+    if provider == "github":
+        _init_github(target)
+    else:
+        _init_gitlab(target)
+
+    # Write shared config
+    config_path = target / ".adr-agent.yml"
+    if not config_path.exists():
+        config_path.write_text(
+            f"# ADR Review Agent configuration\n"
+            f"provider: {provider}\n"
+            f"# arch_repo: your-org/architecture-decisions\n"
+            f"# model: claude-sonnet-4-6\n"
+        )
+        click.echo(f"  Created {config_path.relative_to(target)}")
+
+    click.echo(click.style(f"\nADR Agent initialized for {provider}.", fg="green"))
+    click.echo("\nNext steps:")
+    if provider == "github":
+        click.echo("  1. Set repository secrets: VCS_TOKEN, ANTHROPIC_API_KEY")
+        click.echo("  2. Update .adr-agent.yml with your architecture-decisions repo path")
+        click.echo("  3. Open a pull request to see the agent in action")
+    else:
+        click.echo("  1. Set CI/CD variables: ADR_AGENT_GITLAB_TOKEN, ADR_AGENT_ANTHROPIC_KEY, ADR_AGENT_ARCH_REPO")
+        click.echo("  2. Update .adr-agent.yml with your architecture-decisions repo path")
+        click.echo("  3. Open a merge request to see the agent in action")
+
+
+def _init_github(target: Path) -> None:
+    workflows_dir = target / ".github" / "workflows"
+    workflows_dir.mkdir(parents=True, exist_ok=True)
+    wf_path = workflows_dir / "adr-agent.yml"
+    if wf_path.exists():
+        click.echo(f"  {wf_path.relative_to(target)} already exists — skipping")
+        return
+
+    ci_template = Path(__file__).parent.parent / "ci" / "adr-agent.github-actions.yml"
+    if ci_template.exists():
+        wf_path.write_text(ci_template.read_text())
+    else:
+        wf_path.write_text(_GITHUB_WORKFLOW_TEMPLATE)
+    click.echo(f"  Created {wf_path.relative_to(target)}")
+
+
+def _init_gitlab(target: Path) -> None:
+    ci_path = target / ".gitlab-ci.yml"
+    include_snippet = (
+        "\n# ADR Review Agent\n"
+        "include:\n"
+        "  - project: 'your-group/adr-review-agent'\n"
+        "    file: 'ci/adr-agent.gitlab-ci.yml'\n"
+    )
+    if ci_path.exists():
+        content = ci_path.read_text()
+        if "adr-agent" in content:
+            click.echo("  ADR agent include already present in .gitlab-ci.yml — skipping")
+            return
+        ci_path.write_text(content + include_snippet)
+        click.echo("  Appended ADR agent include to .gitlab-ci.yml")
+    else:
+        ci_path.write_text(include_snippet.lstrip())
+        click.echo(f"  Created {ci_path.relative_to(target)}")
+
+
+_GITHUB_WORKFLOW_TEMPLATE = """\
+name: ADR Architecture Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  adr-review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ADR Agent
+        run: pip install 'adr-agent[github]'
+
+      - name: Run ADR Review
+        env:
+          VCS_PROVIDER: github
+          VCS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          adr-agent review-mr "${{ github.repository }}#${{ github.event.pull_request.number }}" \\
+            --vcs-provider github \\
+            --arch-repo "${{ vars.ADR_ARCH_REPO }}" \\
+            --vcs-token "$VCS_TOKEN"
+"""
 
 
 if __name__ == "__main__":
