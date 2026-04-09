@@ -1,30 +1,73 @@
 # ADR Review Agent
 
-Autonomous agent that identifies architecturally significant changes across GitLab merge requests and maintains an Architecture Decision Log (ADL) and Architecture Decision Records (ADRs).
+Autonomous agent that identifies architecturally significant changes across GitLab merge requests **and GitHub pull requests**, maintaining an Architecture Decision Log (ADL) and Architecture Decision Records (ADRs).
+
+## Supported Platforms
+
+| Platform | Status | Install extra |
+|----------|--------|---------------|
+| **GitLab** | ✅ Supported | `pip install 'adr-agent[gitlab]'` |
+| **GitHub** | ✅ Supported | `pip install 'adr-agent[github]'` |
 
 ## Prerequisites
 
 - Python 3.11+
 - Git
-- GitLab Personal Access Token with `api` scope
+- **GitLab**: Personal Access Token with `api` scope
+- **GitHub**: Personal Access Token or GitHub App token with `repo` scope
 - Anthropic API key
 
 ## Setup
 
+### GitLab (default)
+
 ```bash
-pip install -e .
+pip install -e '.[gitlab]'
+export VCS_PROVIDER="gitlab"          # or omit — gitlab is the default
+export VCS_URL="https://gitlab.com"   # optional, defaults to https://gitlab.com
+export VCS_TOKEN="glpat-xxxxxxxxxxxx"
+export ANTHROPIC_API_KEY="sk-ant-xxxxxxxxxxxx"
+```
+
+<details>
+<summary>Legacy environment variables (still supported)</summary>
+
+```bash
 export GITLAB_URL="https://gitlab.com"
 export GITLAB_TOKEN="glpat-xxxxxxxxxxxx"
+```
+</details>
+
+### GitHub
+
+```bash
+pip install -e '.[github]'
+export VCS_PROVIDER="github"
+export VCS_URL="https://github.com"   # optional, defaults to https://github.com
+export VCS_TOKEN="ghp_xxxxxxxxxxxx"
 export ANTHROPIC_API_KEY="sk-ant-xxxxxxxxxxxx"
 ```
 
 ## Usage
 
-### Analyze all MRs in a GitLab group
+### Bootstrap a repo (generates CI config + settings)
 
 ```bash
+adr-agent init --provider github      # creates .github/workflows/adr-agent.yml
+adr-agent init --provider gitlab      # adds include to .gitlab-ci.yml
+```
+
+### Analyze all MRs/PRs in a GitLab group or GitHub org
+
+```bash
+# GitLab
 adr-agent review-group unlimit-test-agent \
   --arch-repo unlimit-test-agent/architecture-decisions
+
+# GitHub
+adr-agent review-group my-github-org \
+  --vcs-provider github \
+  --arch-repo my-github-org/architecture-decisions
 ```
 
 ### Analyze a single repository
@@ -34,11 +77,17 @@ adr-agent review-repo unlimit-test-agent/order-service \
   --arch-repo unlimit-test-agent/architecture-decisions
 ```
 
-### Analyze a single MR
+### Analyze a single MR/PR
 
 ```bash
+# GitLab — uses ! separator
 adr-agent review-mr "unlimit-test-agent/order-service!3" \
   --arch-repo unlimit-test-agent/architecture-decisions
+
+# GitHub — uses # separator
+adr-agent review-mr "owner/repo#42" \
+  --vcs-provider github \
+  --arch-repo owner/architecture-decisions
 ```
 
 ### Dry run (analyze without committing)
@@ -51,13 +100,13 @@ adr-agent review-group unlimit-test-agent \
 
 ## How It Works
 
-1. **Fetches MR data** from GitLab (diffs, review threads, pipeline status, commits)
+1. **Fetches MR/PR data** from GitLab or GitHub (diffs, review threads, pipeline status, commits)
 2. **Filters** files to architecturally relevant ones (controllers, clients, configs, entities)
 3. **Classifies** significance using 3 parallel LLM perspectives (API contract, dependency coupling, risk/security)
 4. **Aggregates** perspectives — 2/3 consensus required; disagreement triggers escalation
 5. **Generates** ADL entries (for moderate + high) and ADR files (for high only)
 6. **Commits** results to the architecture-decisions repo
-7. **Posts** feedback on the MR with classification summary
+7. **Posts** feedback on the MR/PR with classification summary
 8. **Verifies** the CI pipeline after committing
 
 ## Classification Levels
@@ -72,9 +121,12 @@ adr-agent review-group unlimit-test-agent \
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `GITLAB_URL` | No (default: `https://gitlab.com`) | GitLab instance URL |
-| `GITLAB_TOKEN` | Yes | Personal Access Token with `api` scope |
+| `VCS_PROVIDER` | No (default: `gitlab`) | VCS platform: `gitlab` or `github` |
+| `VCS_URL` | No | VCS instance URL (defaults to `https://gitlab.com` or `https://github.com`) |
+| `VCS_TOKEN` | Yes | Access token for the VCS platform |
 | `ANTHROPIC_API_KEY` | Yes | Anthropic API key |
+| `GITLAB_URL` | No | _(deprecated alias for `VCS_URL`)_ |
+| `GITLAB_TOKEN` | No | _(deprecated alias for `VCS_TOKEN`)_ |
 
 ## Demo Setup
 
@@ -92,7 +144,21 @@ Expected output: ~4 ADL entries, 2-3 ADR files, MR comments on significant MRs.
 
 ## CI/CD Integration
 
-### Quick Start (3 lines)
+### GitHub Actions (Quick Start)
+
+Run `adr-agent init --provider github` in your repo, or manually copy `ci/adr-agent.github-actions.yml` to `.github/workflows/adr-agent.yml`.
+
+Then set these repository secrets/variables:
+
+| Variable | Type | Required | Description |
+|----------|------|----------|-------------|
+| `ANTHROPIC_API_KEY` | Secret | Yes | Anthropic API key |
+| `ADR_ARCH_REPO` | Variable | Yes | Path to architecture-decisions repo |
+| `ADR_AGENT_MODEL` | Variable | No | LLM model (default: `claude-sonnet-4-6`) |
+| `ADR_AGENT_DRY_RUN` | Variable | No | `true`/`false` (default: `false`) |
+| `ADR_AGENT_VERBOSE` | Variable | No | `true`/`false` (default: `false`) |
+
+### GitLab CI (Quick Start — 3 lines)
 
 Add to your service repo's `.gitlab-ci.yml`:
 

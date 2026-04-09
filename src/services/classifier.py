@@ -13,7 +13,7 @@ from src.models.classification import (
     Significance,
     SignificanceClassification,
 )
-from src.models.gitlab_types import FileDiff, MRAnalysisInput
+from src.adapters.vcs_types import FileDiff, PullRequest
 from src.prompts import api_contract, dependency_coupling, risk_security
 
 CLASSIFICATION_TOOL = {
@@ -89,6 +89,7 @@ ARCH_RELEVANT_PATTERNS = [
     r".*build\.gradle.*$",
     r".*pom\.xml$",
     r".*\.gitlab-ci\.yml$",
+    r".*\.github/workflows/.*\.ya?ml$",
     r".*Dockerfile.*$",
     r".*docker-compose.*$",
 ]
@@ -103,10 +104,10 @@ def filter_relevant_diffs(diffs: list[FileDiff]) -> list[FileDiff]:
     return relevant
 
 
-def build_user_message(mr: MRAnalysisInput, relevant_diffs: list[FileDiff]) -> str:
+def build_user_message(mr: PullRequest, relevant_diffs: list[FileDiff]) -> str:
     parts = [
         f"## MR: {mr.title}",
-        f"**Service**: {mr.project_path}",
+        f"**Service**: {mr.repo_path}",
         f"**Branch**: {mr.source_branch} → {mr.target_branch}",
         f"**State**: {mr.state}",
         f"**Description**: {mr.description or '(none)'}",
@@ -196,7 +197,7 @@ def aggregate_perspectives(perspectives: list[PerspectiveResult]) -> MultiAgentR
 
 
 async def classify_mr(
-    mr: MRAnalysisInput,
+    mr: PullRequest,
     api_key: str,
     model: str = "claude-sonnet-4-6",
 ) -> MultiAgentReview:

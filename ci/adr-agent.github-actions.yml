@@ -1,0 +1,80 @@
+# =============================================================================
+# ADR Review Agent — GitHub Actions Workflow
+# =============================================================================
+#
+# Automatically analyzes pull requests for architectural significance and
+# maintains an Architecture Decision Log (ADL) and Architecture Decision
+# Records (ADRs) in your architecture-decisions repository.
+#
+# USAGE:
+#   Copy this file to your repo's .github/workflows/adr-agent.yml
+#   or run: adr-agent init --provider github
+#
+#   Then set these repository secrets/variables:
+#     - ANTHROPIC_API_KEY (secret, required)
+#     - ADR_ARCH_REPO     (variable, required — e.g., 'your-org/architecture-decisions')
+#
+# =============================================================================
+
+name: ADR Architecture Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  adr-review:
+    runs-on: ubuntu-latest
+    # Equivalent of GitLab's allow_failure: true (advisory mode)
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ADR Agent
+        run: pip install 'adr-agent[github]'
+
+      - name: Run ADR Review
+        env:
+          VCS_PROVIDER: github
+          VCS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          # Build the command
+          CMD="adr-agent review-mr '${{ github.repository }}#${{ github.event.pull_request.number }}'"
+          CMD="$CMD --vcs-provider github"
+          CMD="$CMD --vcs-token '$VCS_TOKEN'"
+          CMD="$CMD --anthropic-key '$ANTHROPIC_API_KEY'"
+          CMD="$CMD --arch-repo '${{ vars.ADR_ARCH_REPO }}'"
+
+          # Optional: model selection
+          if [ -n "${{ vars.ADR_AGENT_MODEL }}" ]; then
+            CMD="$CMD --model '${{ vars.ADR_AGENT_MODEL }}'"
+          fi
+
+          # Optional: dry-run mode
+          if [ "${{ vars.ADR_AGENT_DRY_RUN }}" = "true" ]; then
+            CMD="$CMD --dry-run"
+            echo "Running in DRY-RUN mode — no commits or comments will be posted."
+          fi
+
+          # Optional: verbose mode
+          if [ "${{ vars.ADR_AGENT_VERBOSE }}" = "true" ]; then
+            CMD="$CMD --verbose"
+          fi
+
+          echo "Analyzing PR: ${{ github.repository }}#${{ github.event.pull_request.number }}"
+          echo "Architecture repo: ${{ vars.ADR_ARCH_REPO }}"
+          echo ""
+
+          # Execute
+          eval $CMD

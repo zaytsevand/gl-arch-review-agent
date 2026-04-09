@@ -5,16 +5,30 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from src.adapters.git_credential import format_clone_url
+
+# Merge-commit patterns per VCS provider
+_MERGE_PATTERNS: dict[str, re.Pattern] = {
+    "gitlab": re.compile(r"See merge request .+!(\d+)"),
+    "github": re.compile(r"Merge pull request #(\d+)"),
+}
+
 
 class GitOps:
-    def __init__(self, token: str, gitlab_url: str = "https://gitlab.com"):
+    def __init__(
+        self,
+        token: str,
+        base_url: str = "https://gitlab.com",
+        provider: str = "gitlab",
+    ):
         self.token = token
-        self.gitlab_url = gitlab_url
+        self.base_url = base_url
+        self.provider = provider
 
     def clone_repo(self, project_path: str, target_dir: str | None = None) -> Path:
         if target_dir is None:
             target_dir = tempfile.mkdtemp(prefix="adr-agent-")
-        url = f"https://oauth2:{self.token}@{self.gitlab_url.replace('https://', '')}/{project_path}.git"
+        url = format_clone_url(self.provider, self.base_url, self.token, project_path)
         subprocess.run(
             ["git", "clone", "--quiet", url, target_dir],
             check=True,
@@ -55,13 +69,21 @@ class GitOps:
         return entries
 
     def find_merge_commit_for_sha(self, repo_dir: Path, sha: str) -> int | None:
+        pattern = _MERGE_PATTERNS.get(self.provider)
+        if not pattern:
+            return None
+
+        grep_text = (
+            "See merge request" if self.provider == "gitlab" else "Merge pull request"
+        )
+
         try:
             result = subprocess.run(
                 [
                     "git",
                     "log",
                     "--merges",
-                    "--grep=See merge request",
+                    f"--grep={grep_text}",
                     "--ancestry-path",
                     f"{sha}..HEAD",
                     "--oneline",
@@ -75,7 +97,7 @@ class GitOps:
         except subprocess.CalledProcessError:
             return None
 
-        match = re.search(r"See merge request .+!(\d+)", result.stdout)
+        match = pattern.search(result.stdout)
         if match:
             return int(match.group(1))
         return None

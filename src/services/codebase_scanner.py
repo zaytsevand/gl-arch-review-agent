@@ -129,7 +129,14 @@ def scan_build_files(repo_dir: Path) -> TechStack:
 
 
 def scan_ci_config(repo_dir: Path) -> CIConfig | None:
+    # Check GitLab CI first, then GitHub Actions
     ci_file = repo_dir / ".gitlab-ci.yml"
+    if not ci_file.exists():
+        workflows_dir = repo_dir / ".github" / "workflows"
+        if workflows_dir.is_dir():
+            wf_files = list(workflows_dir.glob("*.yml")) + list(workflows_dir.glob("*.yaml"))
+            if wf_files:
+                ci_file = wf_files[0]
     if not ci_file.exists():
         return None
 

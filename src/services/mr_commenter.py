@@ -10,8 +10,8 @@ from src.models.classification import (
     MultiAgentReview,
     Significance,
 )
-from src.models.gitlab_types import MRAnalysisInput
-from src.services.gitlab_client import GitLabClient
+from src.adapters.vcs_types import PullRequest
+from src.adapters.vcs_client import VCSClient
 
 TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
 
@@ -22,7 +22,7 @@ def _render_comment(comment_type: str, **kwargs) -> str:
     return template.render(comment_type=comment_type, **kwargs)
 
 
-def detect_doc_inconsistencies(mr: MRAnalysisInput) -> list[dict]:
+def detect_doc_inconsistencies(mr: PullRequest) -> list[dict]:
     issues: list[dict] = []
     for diff in mr.diffs:
         if "README" in diff.new_path:
@@ -42,9 +42,9 @@ def detect_doc_inconsistencies(mr: MRAnalysisInput) -> list[dict]:
 
 
 def post_feedback(
-    mr: MRAnalysisInput,
+    mr: PullRequest,
     review: MultiAgentReview,
-    gitlab_client: GitLabClient,
+    vcs_client: VCSClient,
     adl_entry_number: int | None = None,
     adr_link: str | None = None,
 ) -> None:
@@ -60,7 +60,7 @@ def post_feedback(
                 if review.perspectives
                 else "No significant architectural impact detected.",
             )
-            gitlab_client.post_mr_note(mr.project_path, mr.mr_iid, body)
+            vcs_client.post_comment(mr.repo_path, mr.pr_id, body)
         return
 
     first_cls = review.perspectives[0].classification if review.perspectives else None
@@ -76,9 +76,9 @@ def post_feedback(
         adr_link=adr_link,
         adl_entry=adl_entry_number,
     )
-    gitlab_client.post_mr_note(mr.project_path, mr.mr_iid, body)
+    vcs_client.post_comment(mr.repo_path, mr.pr_id, body)
 
     doc_issues = detect_doc_inconsistencies(mr)
     for issue in doc_issues:
         quality_body = _render_comment("quality", summary=issue["message"])
-        gitlab_client.post_mr_note(mr.project_path, mr.mr_iid, quality_body)
+        vcs_client.post_comment(mr.repo_path, mr.pr_id, quality_body)
